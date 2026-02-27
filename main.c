@@ -382,6 +382,11 @@ int saia_report_menu(void) {
         if (file_read_lines(report_path, &lines, &count) == 0) {
             size_t start = (count > 100) ? count - 100 : 0;
             for (size_t i = start; i < count; i++) {
+                if (strlen(filter_keyword) > 0) {
+                    if (strstr(lines[i], filter_keyword) == NULL) {
+                        continue;
+                    }
+                }
                 printf("%s\n", lines[i]);
             }
 
@@ -456,14 +461,16 @@ static int saia_write_list_file_from_input(const char *file_path, int split_spac
         }
         
         if (split_spaces) {
-            char *token = strtok(trimmed, " 	");
+            char *token = strtok(trimmed, " 	
+");
             while (token != NULL) {
                 if (strlen(token) > 0) {
                     fprintf(fp, "%s
 ", token);
                     count++;
                 }
-                token = strtok(NULL, " 	");
+                token = strtok(NULL, " 	
+");
             }
         } else {
             if (strlen(trimmed) > 0) {
