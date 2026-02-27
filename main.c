@@ -400,6 +400,89 @@ int saia_report_menu(void) {
     return 0;
 }
 
+// ==================== 辅助输入函数 ====================
+
+static int saia_write_list_file_from_input(const char *file_path, int split_spaces, int append_mode) {
+    color_cyan();
+    printf("支持空格/换行混合输入 (自动去除 # 注释)
+");
+    color_reset();
+    printf("请输入内容，单独输入 EOF 结束:
+");
+    
+    char buffer[4096];
+    char tmp_path[4096];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", file_path);
+    
+    FILE *fp;
+    if (append_mode) {
+        fp = fopen(tmp_path, "w");
+        if (fp && file_exists(file_path)) {
+            char *content = file_read_all(file_path);
+            if (content) {
+                fprintf(fp, "%s", content);
+                size_t len = strlen(content);
+                if (len > 0 && content[len - 1] != '
+') {
+                    fprintf(fp, "
+");
+                }
+                free(content);
+            }
+        }
+    } else {
+        fp = fopen(tmp_path, "w");
+    }
+    
+    if (!fp) {
+        color_red();
+        printf(">>> 写入临时文件失败
+");
+        color_reset();
+        return -1;
+    }
+    
+    int count = 0;
+    while (fgets(buffer, sizeof(buffer), stdin)) {
+        char *comment = strchr(buffer, '#');
+        if (comment) *comment = ' ';
+        buffer[strcspn(buffer, "
+")] = ' ';
+        char *trimmed = str_trim(buffer);
+        if (!trimmed) continue;
+        
+        if (strcmp(trimmed, "EOF") == 0) {
+            break;
+        }
+        
+        if (split_spaces) {
+            char *token = strtok(trimmed, " 	");
+            while (token != NULL) {
+                if (strlen(token) > 0) {
+                    fprintf(fp, "%s
+", token);
+                    count++;
+                }
+                token = strtok(NULL, " 	");
+            }
+        } else {
+            if (strlen(trimmed) > 0) {
+                fprintf(fp, "%s
+", trimmed);
+                count++;
+            }
+        }
+    }
+    fclose(fp);
+    
+    if (file_exists(file_path)) {
+        file_remove(file_path);
+    }
+    rename(tmp_path, file_path);
+    
+    return count;
+}
+
 // ==================== 节点管理 ====================
 
 int saia_nodes_menu(void) {
@@ -425,14 +508,46 @@ int saia_nodes_menu(void) {
 
     switch (choice) {
         case 1: {
-            printf("输入节点 (IP或IP段，每行一个，空行结束):\n");
-            char buffer[256];
-            string_buffer_t *buf = string_buffer_create(4096);
+            color_cyan();
+            printf("
+>>> 更换 IP 列表
+");
+            color_reset();
+            int count = saia_write_list_file_from_input(nodes_path, 1, 0);
+            if (count >= 0) {
+                color_green();
+                printf(">>> IP 列表已更新，本次写入 %d 条
+", count);
+                color_reset();
+            } else {
+                color_red();
+                printf(">>> 写入失败或已取消
+");
+                color_reset();
+            }
+            break;
+        }
 
-            while (fgets(buffer, sizeof(buffer), stdin)) {
-                buffer[strcspn(buffer, "\n")] = '\0';
-                if (strlen(buffer) == 0) break;
-
+        case 2: {
+            color_cyan();
+            printf("
+>>> 添加 IP 节点
+");
+            color_reset();
+            int count = saia_write_list_file_from_input(nodes_path, 1, 1);
+            if (count >= 0) {
+                color_green();
+                printf(">>> 节点已追加，本次追加 %d 条
+", count);
+                color_reset();
+            } else {
+                color_red();
+                printf(">>> 追加失败或已取消
+");
+                color_reset();
+            }
+            break;
+        }
                 if (ip_is_valid(buffer) || strstr(buffer, "/") || strstr(buffer, "-")) {
                     string_buffer_appendf(buf, "%s\n", buffer);
                 }
@@ -447,7 +562,7 @@ int saia_nodes_menu(void) {
             break;
         }
 
-        case 2: {
+        case 3: {
             if (file_exists(nodes_path)) {
                 char **lines = NULL;
                 size_t count = 0;
@@ -471,7 +586,7 @@ int saia_nodes_menu(void) {
             break;
         }
 
-        case 3:
+        case 4:
             printf("功能开发中...\n");
             break;
 
@@ -506,13 +621,46 @@ int saia_credentials_menu(void) {
 
     switch (choice) {
         case 1: {
-            printf("输入凭据 (用户名:密码 或 密码，每行一个，空行结束):\n");
-            char buffer[256];
+            color_cyan();
+            printf("
+>>> 更新 Tokens
+");
+            color_reset();
+            int count = saia_write_list_file_from_input(tokens_path, 1, 0);
+            if (count >= 0) {
+                color_green();
+                printf(">>> Tokens 已更新，本次写入 %d 条
+", count);
+                color_reset();
+            } else {
+                color_red();
+                printf(">>> 写入失败或已取消
+");
+                color_reset();
+            }
+            break;
+        }
 
-            while (fgets(buffer, sizeof(buffer), stdin)) {
-                buffer[strcspn(buffer, "\n")] = '\0';
-                if (strlen(buffer) == 0) break;
-
+        case 2: {
+            color_cyan();
+            printf("
+>>> 添加 Tokens
+");
+            color_reset();
+            int count = saia_write_list_file_from_input(tokens_path, 1, 1);
+            if (count >= 0) {
+                color_green();
+                printf(">>> Tokens 已追加，本次追加 %d 条
+", count);
+                color_reset();
+            } else {
+                color_red();
+                printf(">>> 追加失败或已取消
+");
+                color_reset();
+            }
+            break;
+        }
                 if (strstr(buffer, ":")) {
                     file_append(tokens_path, buffer);
                     file_append(tokens_path, "\n");
@@ -528,7 +676,7 @@ int saia_credentials_menu(void) {
             break;
         }
 
-        case 2: {
+        case 3: {
             if (file_exists(tokens_path)) {
                 char **lines = NULL;
                 size_t count = 0;
@@ -539,7 +687,6 @@ int saia_credentials_menu(void) {
                             char *colon = strchr(lines[i], ':');
                             *colon = '\0';
                             printf("  用户: %s, 密码: ***\n", lines[i]);
-                            *colon = ':';
                         }
                     }
                     if (count > 10) {
