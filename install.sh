@@ -23,27 +23,34 @@ error() {
 
 check_env() {
     log "Checking environment..."
-    # Check for git
-    if ! command -v git >/dev/null 2>&1; then
-        error "Git is not installed. Please install git first."
+    command -v git >/dev/null 2>&1 || error "Git is not installed."
+    command -v screen >/dev/null 2>&1 || error "Screen is not installed."
+    
+    # Try to find a working C compiler
+    if command -v cc >/dev/null 2>&1; then COMPILER="cc";
+    elif command -v gcc >/dev/null 2>&1; then COMPILER="gcc";
+    elif command -v clang >/dev/null 2>&1; then COMPILER="clang";
+    elif command -v gcc10 >/dev/null 2>&1; then COMPILER="gcc10";
+    elif command -v clang10 >/dev/null 2>&1; then COMPILER="clang10";
+    else error "No C compiler found."; fi
+    
+    log "Using compiler: $COMPILER"
+}
+
+fix_source_code() {
+    log "Applying fixes to source code..."
+    
+    # Fix 1: string_ops.c - strchr uses single quotes for char, not double quotes for string
+    if [ -f "string_ops.c" ]; then
+        sed -i.bak "s/strchr(p, \"|\")/strchr(p, '|')/g" string_ops.c
+        # Fix 2: string_ops.c - strnicmp is Windows specific, use strncasecmp on Unix
+        sed -i.bak "s/strnicmp/strncasecmp/g" string_ops.c
+        log "Patched string_ops.c"
     fi
 
-    # Check for screen
-    if ! command -v screen >/dev/null 2>&1; then
-        error "Screen is not installed. Please install screen first."
-    fi
-    
-    # Check for compiler
-    if command -v cc >/dev/null 2>&1; then
-        COMPILER="cc"
-    elif command -v gcc >/dev/null 2>&1; then
-        COMPILER="gcc"
-    elif command -v clang >/dev/null 2>&1; then
-        COMPILER="clang"
-    else
-        error "No C compiler found (cc, gcc, or clang). Please install a compiler."
-    fi
-    log "Using compiler: $COMPILER"
+    # Fix 3: utils.c - Format string warnings (optional but good practice)
+    # This is complex to regex safely, skipping unless critical error occurs.
+    # The strchr/strnicmp were the main blockers.
 }
 
 install_saia() {
@@ -57,15 +64,17 @@ install_saia() {
         cd "$INSTALL_DIR" || error "Failed to access directory"
     fi
 
-    log "Compiling SAIA..."
-    # Clean previous build if any
+    # Apply fixes before compiling
+    fix_source_code
+
+    log "Compiling..."
     rm -f "$BIN_NAME"
     
-    # Compile
-    $COMPILER *.c -o "$BIN_NAME" -lpthread -lm -std=c11 -Wall -O2
+    # Attempt compilation
+    $COMPILER *.c -o "$BIN_NAME" -lpthread -lm -std=c11 -Wall -O2 -Wno-format
     
     if [ ! -f "$BIN_NAME" ]; then
-        error "Compilation finished but binary not found."
+        error "Compilation failed. Check output above."
     fi
     
     chmod +x "$BIN_NAME"
@@ -74,119 +83,61 @@ install_saia() {
 
 create_wrapper() {
     log "Creating management script..."
-    
-    # Create the manager script
     cat << EOF > "$INSTALL_DIR/saia_manager.sh"
 #!/bin/bash
 CMD="\$1"
 DIR="$INSTALL_DIR"
 BIN="./$BIN_NAME"
 SCREEN_NAME="$SERVICE_NAME"
-
 cd "\$DIR" || exit 1
-
 case "\$CMD" in
     start)
         if screen -list | grep -q "\$SCREEN_NAME"; then
             echo "Service is already running."
         else
-            # Start in detached screen session
             screen -dmS "\$SCREEN_NAME" "\$BIN"
-            echo "Service started in screen session '\$SCREEN_NAME'."
+            echo "Service started."
         fi
         ;;
     stop)
-        if screen -list | grep -q "\$SCREEN_NAME"; then
-            screen -S "\$SCREEN_NAME" -X quit
-            echo "Service stopped."
-        else
-            echo "Service is not running."
-        fi
+        screen -S "\$SCREEN_NAME" -X quit
+        echo "Service stopped."
         ;;
     restart)
-        \$0 stop
-        sleep 2
-        \$0 start
+        \$0 stop; sleep 1; \$0 start
         ;;
     status)
-        if screen -list | grep -q "\$SCREEN_NAME"; then
-            echo "Service is RUNNING (Screen session: \$SCREEN_NAME)."
-        else
-            echo "Service is STOPPED."
-        fi
+        screen -list | grep -q "\$SCREEN_NAME" && echo "RUNNING" || echo "STOPPED"
         ;;
     attach)
-        if screen -list | grep -q "\$SCREEN_NAME"; then
-            echo "Attaching to service... (Press Ctrl+A, then D to detach)"
-            sleep 1
-            screen -r "\$SCREEN_NAME"
-        else
-            echo "Service is not running."
-        fi
-        ;;
-    log)
-        if [ -f "audit_report.log" ]; then
-            tail -f audit_report.log
-        else
-            echo "Log file not found."
-        fi
+        screen -r "\$SCREEN_NAME"
         ;;
     *)
-        echo "Usage: saia {start|stop|restart|status|attach|log}"
+        echo "Usage: saia {start|stop|restart|status|attach}"
         exit 1
         ;;
 esac
 EOF
     chmod +x "$INSTALL_DIR/saia_manager.sh"
     
-    # Add alias to .bashrc or .zshrc if not present
-    SHELL_RC="$HOME/.bashrc"
-    [ -f "$HOME/.zshrc" ] && SHELL_RC="$HOME/.zshrc"
-
-    if ! grep -q "alias saia=" "$SHELL_RC"; then
-        echo "" >> "$SHELL_RC"
-        echo "# SAIA Manager Alias" >> "$SHELL_RC"
-        echo "alias saia='$INSTALL_DIR/saia_manager.sh'" >> "$SHELL_RC"
-        log "Added 'saia' alias to $SHELL_RC"
+    if ! grep -q "alias saia=" ~/.bashrc; then
+        echo "alias saia='$INSTALL_DIR/saia_manager.sh'" >> ~/.bashrc
     fi
 }
 
 setup_autostart() {
-    log "Setting up autostart via crontab..."
+    log "Setting up autostart..."
     CRON_CMD="@reboot $INSTALL_DIR/saia_manager.sh start"
-    
-    # Check if job already exists
-    if ! crontab -l 2>/dev/null | grep -q "$INSTALL_DIR/saia_manager.sh"; then
-        (crontab -l 2>/dev/null; echo "$CRON_CMD") | crontab -
-        log "Autostart enabled."
-    else
-        log "Autostart already configured."
-    fi
+    (crontab -l 2>/dev/null | grep -v "saia_manager.sh"; echo "$CRON_CMD") | crontab -
 }
 
 main() {
-    echo "========================================"
-    echo "   SAIA Auto-Installer for SERV00"
-    echo "========================================"
-    
     check_env
     install_saia
     create_wrapper
     setup_autostart
-    
-    # Start the service
     "$INSTALL_DIR/saia_manager.sh" start
-    
-    echo "========================================"
-    log "Installation Complete!"
-    echo -e "${YELLOW}Usage Instructions:${NC}"
-    echo "  1. Run 'source ~/.bashrc' (or reopen terminal) to activate the 'saia' command."
-    echo "  2. Use the following commands to manage the service:"
-    echo "     $ saia status   # Check service status"
-    echo "     $ saia attach   # View the running program (Press Ctrl+A, D to detach)"
-    echo "     $ saia stop     # Stop the service"
-    echo "     $ saia start    # Start the service"
-    echo "========================================"
+    log "Installation Complete! Type 'saia attach' to see the menu."
 }
 
 main
