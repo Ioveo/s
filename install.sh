@@ -157,8 +157,11 @@ case "\$CMD" in
         screen -r "\$SCREEN_NAME"
         ;;
     *)
-        echo "Usage: saia {start|stop|restart|status|attach}"
-        exit 1
+        if ! screen -list | grep -q "\$SCREEN_NAME"; then
+            \$0 start
+            sleep 1
+        fi
+        \$0 attach
         ;;
 esac
 EOF
@@ -181,7 +184,17 @@ main() {
     create_wrapper
     setup_autostart
     "$INSTALL_DIR/saia_manager.sh" start
-    log "Installation Complete! Type 'saia attach' to see the menu."
+    echo -e "
+${YELLOW}================================================${NC}
+${GREEN}安装完成！程序已在后台运行。${NC}
+${YELLOW}请在终端复制粘贴并回车执行以下命令来呼出菜单：${NC}
+
+    ${GREEN}source ~/.bashrc && saia${NC}
+
+${YELLOW}以后无论何时，只要在终端输入 ${GREEN}saia${YELLOW} 即可直接打开菜单！
+离开菜单按 Ctrl+A 然后按 D 即可保持后台运行。${NC}
+${YELLOW}================================================${NC}
+"
 }
 
 main
