@@ -42,34 +42,59 @@ fix_source_code() {
     
     # Fix 1: string_ops.c - strchr uses single quotes
     if [ -f "string_ops.c" ]; then
-        sed -i.bak "s/strchr(p, \"|\")/strchr(p, '|')/g" string_ops.c
-        sed -i.bak "s/strnicmp/strncasecmp/g" string_ops.c
+        # Use perl for in-place edit as it's more portable than sed -i
+        perl -pi -e "s/strchr\(p, \"\|\"\)/strchr(p, '|')/g" string_ops.c
+        perl -pi -e "s/strnicmp/strncasecmp/g" string_ops.c
         log "Patched string_ops.c"
     fi
 
     # Fix 2: saia.h - Add declaration for color_white
     if [ -f "saia.h" ]; then
         if ! grep -q "void color_white(void);" saia.h; then
-            # Insert before #endif
-            sed -i.bak "/#endif/i void color_white(void);" saia.h
+            # Append before #endif using perl
+            perl -pi -e 's/#endif/void color_white(void);\n#endif/' saia.h
             log "Patched saia.h (added color_white)"
         fi
         
         # Fix 3: saia.h - Fix socket_connect_timeout declaration type mismatch
-        # Change 'int addrlen' to 'socklen_t addrlen'
-        sed -i.bak "s/int addrlen/socklen_t addrlen/g" saia.h
+        perl -pi -e "s/int addrlen/socklen_t addrlen/g" saia.h
         log "Patched saia.h (fixed socket_connect_timeout type)"
     fi
 
-    # Fix 4: network.c - Fix ip_int member access error
+    # Fix 4: network.c - Fix ip_int member access error AND Add missing dns_resolve
     if [ -f "network.c" ]; then
-        # Replace the problematic inet_pton line with string copy
-        # We replace: if (inet_pton(AF_INET, str, &addr->ip_int) <= 0) {
-        # With:       strncpy(addr->ip, str, sizeof(addr->ip)); if (0) {
-        
-        sed -i.bak 's/if (inet_pton(AF_INET, str, &addr->ip_int) <= 0) {/strncpy(addr->ip, str, sizeof(addr->ip)); if (0) {/' network.c
-        
+        # Replace the problematic inet_pton line with string copy logic
+        perl -pi -e 's/if \(inet_pton\(AF_INET, str, &addr->ip_int\) <= 0\) \{/strncpy(addr->ip, str, sizeof(addr->ip)); if (0) {/' network.c
         log "Patched network.c (fixed ip_int member access)"
+
+        # Check if dns_resolve exists, if not append it
+        if ! grep -q "int dns_resolve" network.c; then
+            log "Appending missing dns_resolve implementation to network.c..."
+            cat << 'EOF' >> network.c
+
+// Missing dns_resolve implementation added by installer
+int dns_resolve(const char *hostname, char *ip_buf, size_t size) {
+    struct addrinfo hints, *res;
+    int err;
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    
+    if ((err = getaddrinfo(hostname, NULL, &hints, &res)) != 0) {
+        return -1;
+    }
+    
+    struct sockaddr_in *ipv4 = (struct sockaddr_in *)res->ai_addr;
+    if (!inet_ntop(AF_INET, &(ipv4->sin_addr), ip_buf, size)) {
+        freeaddrinfo(res);
+        return -1;
+    }
+    
+    freeaddrinfo(res);
+    return 0;
+}
+EOF
+        fi
     fi
 }
 
@@ -90,7 +115,7 @@ install_saia() {
     rm -f "$BIN_NAME"
     
     # Compile
-    $COMPILER *.c -o "$BIN_NAME" -lpthread -lm -std=c11 -Wall -O2 -Wno-format -Wno-unused-variable -Wno-unused-but-set-variable
+    $COMPILER *.c -o "$BIN_NAME" -lpthread -lm -std=c11 -Wall -O2 -Wno-format -Wno-unused-variable -Wno-unused-but-set-variable -Wno-implicit-function-declaration
     
     if [ ! -f "$BIN_NAME" ]; then
         error "Compilation failed. Check output above."
