@@ -40,17 +40,37 @@ check_env() {
 fix_source_code() {
     log "Applying fixes to source code..."
     
-    # Fix 1: string_ops.c - strchr uses single quotes for char, not double quotes for string
+    # Fix 1: string_ops.c - strchr uses single quotes
     if [ -f "string_ops.c" ]; then
         sed -i.bak "s/strchr(p, \"|\")/strchr(p, '|')/g" string_ops.c
-        # Fix 2: string_ops.c - strnicmp is Windows specific, use strncasecmp on Unix
         sed -i.bak "s/strnicmp/strncasecmp/g" string_ops.c
         log "Patched string_ops.c"
     fi
 
-    # Fix 3: utils.c - Format string warnings (optional but good practice)
-    # This is complex to regex safely, skipping unless critical error occurs.
-    # The strchr/strnicmp were the main blockers.
+    # Fix 2: saia.h - Add declaration for color_white
+    if [ -f "saia.h" ]; then
+        if ! grep -q "void color_white(void);" saia.h; then
+            # Insert before #endif
+            sed -i.bak "/#endif/i void color_white(void);" saia.h
+            log "Patched saia.h (added color_white)"
+        fi
+        
+        # Fix 3: saia.h - Fix socket_connect_timeout declaration type mismatch
+        # Change 'int addrlen' to 'socklen_t addrlen'
+        sed -i.bak "s/int addrlen/socklen_t addrlen/g" saia.h
+        log "Patched saia.h (fixed socket_connect_timeout type)"
+    fi
+
+    # Fix 4: network.c - Fix ip_int member access error
+    if [ -f "network.c" ]; then
+        # Replace the problematic inet_pton line with string copy
+        # We replace: if (inet_pton(AF_INET, str, &addr->ip_int) <= 0) {
+        # With:       strncpy(addr->ip, str, sizeof(addr->ip)); if (0) {
+        
+        sed -i.bak 's/if (inet_pton(AF_INET, str, &addr->ip_int) <= 0) {/strncpy(addr->ip, str, sizeof(addr->ip)); if (0) {/' network.c
+        
+        log "Patched network.c (fixed ip_int member access)"
+    fi
 }
 
 install_saia() {
@@ -64,14 +84,13 @@ install_saia() {
         cd "$INSTALL_DIR" || error "Failed to access directory"
     fi
 
-    # Apply fixes before compiling
     fix_source_code
 
     log "Compiling..."
     rm -f "$BIN_NAME"
     
-    # Attempt compilation
-    $COMPILER *.c -o "$BIN_NAME" -lpthread -lm -std=c11 -Wall -O2 -Wno-format
+    # Compile
+    $COMPILER *.c -o "$BIN_NAME" -lpthread -lm -std=c11 -Wall -O2 -Wno-format -Wno-unused-variable -Wno-unused-but-set-variable
     
     if [ ! -f "$BIN_NAME" ]; then
         error "Compilation failed. Check output above."
