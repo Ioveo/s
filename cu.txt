@@ -1,0 +1,166 @@
+main.c:385:28: error: use of undeclared identifier 'filter_keyword'
+  385 |                 if (strlen(filter_keyword) > 0) {
+      |                            ^
+main.c:386:42: error: use of undeclared identifier 'filter_keyword'
+  386 |                     if (strstr(lines[i], filter_keyword) == NULL) {
+      |                                          ^
+main.c:412:12: warning: missing terminating '"' character [-Winvalid-pp-token]
+  412 |     printf("支持空格/换行混合输入 (自动去除 # 注释)
+      |            ^
+main.c:412:12: error: expected expression
+main.c:413:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  413 | ");
+      | ^
+main.c:415:12: warning: missing terminating '"' character [-Winvalid-pp-token]
+  415 |     printf("请输入内容，单独输入 EOF 结束:
+      |            ^
+main.c:416:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  416 | ");
+      | ^
+main.c:430:52: warning: missing terminating ' character [-Winvalid-pp-token]
+  430 |                 if (len > 0 && content[len - 1] != '
+      |                                                    ^
+main.c:431:1: warning: missing terminating ' character [-Winvalid-pp-token]
+  431 | ') {
+      | ^
+main.c:432:33: warning: missing terminating '"' character [-Winvalid-pp-token]
+  432 |                     fprintf(fp, "
+      |                                 ^
+main.c:433:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  433 | ");
+      | ^
+main.c:444:16: warning: missing terminating '"' character [-Winvalid-pp-token]
+  444 |         printf(">>> 写入临时文件失败
+      |                ^
+main.c:445:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  445 | ");
+      | ^
+main.c:451:33: error: use of undeclared identifier 'buffer'
+  451 |     while (fgets(buffer, sizeof(buffer), stdin)) {
+      |                                 ^
+main.c:451:18: error: use of undeclared identifier 'buffer'
+  451 |     while (fgets(buffer, sizeof(buffer), stdin)) {
+      |                  ^
+main.c:452:32: error: use of undeclared identifier 'buffer'
+  452 |         char *comment = strchr(buffer, '#');
+      |                                ^
+main.c:453:34: warning: null character(s) preserved in char literal [-Wnull-character]
+  453 |         if (comment) *comment = '<U+0000>';
+      |                                  ^
+main.c:454:9: error: use of undeclared identifier 'buffer'
+  454 |         buffer[strcspn(buffer, "
+      |         ^
+main.c:454:32: warning: missing terminating '"' character [-Winvalid-pp-token]
+  454 |         buffer[strcspn(buffer, "
+      |                                ^
+main.c:454:32: error: expected expression
+main.c:455:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  455 | ")] = '<U+0000>';
+      | ^
+main.c:464:43: warning: missing terminating '"' character [-Winvalid-pp-token]
+  464 |             char *token = strtok(trimmed, "     
+      |                                           ^
+main.c:465:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  465 | ");
+      | ^
+main.c:468:33: warning: missing terminating '"' character [-Winvalid-pp-token]
+  468 |                     fprintf(fp, "%s
+      |                                 ^
+main.c:469:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  469 | ", token);
+      | ^
+main.c:472:38: warning: missing terminating '"' character [-Winvalid-pp-token]
+  472 |                 token = strtok(NULL, "  
+      |                                      ^
+main.c:473:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  473 | ");
+      | ^
+main.c:477:29: warning: missing terminating '"' character [-Winvalid-pp-token]
+  477 |                 fprintf(fp, "%s
+      |                             ^
+main.c:478:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  478 | ", trimmed);
+      | ^
+main.c:454:24: error: use of undeclared identifier 'buffer'
+  454 |         buffer[strcspn(buffer, "
+      |                        ^
+main.c:483:15: error: expected ']'
+  483 |     fclose(fp);
+      |               ^
+main.c:454:15: note: to match this '['
+  454 |         buffer[strcspn(buffer, "
+      |               ^
+main.c:488:12: error: use of undeclared identifier 'tmp_path'
+  488 |     rename(tmp_path, file_path);
+      |            ^
+main.c:490:12: error: use of undeclared identifier 'count'
+  490 |     return count;
+      |            ^
+main.c:495:27: error: function definition is not allowed here
+  495 | int saia_nodes_menu(void) {
+      |                           ^
+main.c:519:20: warning: missing terminating '"' character [-Winvalid-pp-token]
+  519 |             printf("
+      |                    ^
+main.c:521:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  521 | ");
+      | ^
+main.c:526:24: warning: missing terminating '"' character [-Winvalid-pp-token]
+  526 |                 printf(">>> IP 列表已更新，本次写入 %d 条
+      |                        ^
+main.c:527:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  527 | ", count);
+      | ^
+main.c:531:24: warning: missing terminating '"' character [-Winvalid-pp-token]
+  531 |                 printf(">>> 写入失败或已取消
+      |                        ^
+main.c:532:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  532 | ");
+      | ^
+main.c:540:20: warning: missing terminating '"' character [-Winvalid-pp-token]
+  540 |             printf("
+      |                    ^
+main.c:542:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  542 | ");
+      | ^
+main.c:547:24: warning: missing terminating '"' character [-Winvalid-pp-token]
+  547 |                 printf(">>> 节点已追加，本次追加 %d 条
+      |                        ^
+main.c:548:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  548 | ", count);
+      | ^
+main.c:552:24: warning: missing terminating '"' character [-Winvalid-pp-token]
+  552 |                 printf(">>> 追加失败或已取消
+      |                        ^
+main.c:553:1: warning: missing terminating '"' character [-Winvalid-pp-token]
+  553 | ");
+      | ^
+main.c:572:9: error: 'case' statement not in switch statement
+  572 |         case 3: {
+      |         ^
+main.c:573:29: error: use of undeclared identifier 'nodes_path'; did you mean 'file_path'?
+  573 |             if (file_exists(nodes_path)) {
+      |                             ^~~~~~~~~~
+      |                             file_path
+main.c:410:56: note: 'file_path' declared here
+  410 | static int saia_write_list_file_from_input(const char *file_path, int split_spaces, int append_mode) {
+      |                                                        ^
+main.c:576:37: error: use of undeclared identifier 'nodes_path'; did you mean 'file_path'?
+  576 |                 if (file_read_lines(nodes_path, &lines, &count) == 0) {
+      |                                     ^~~~~~~~~~
+      |                                     file_path
+main.c:410:56: note: 'file_path' declared here
+  410 | static int saia_write_list_file_from_input(const char *file_path, int split_spaces, int append_mode) {
+      |                                                        ^
+main.c:593:13: error: 'break' statement not in loop or switch statement
+  593 |             break;
+      |             ^
+main.c:596:9: error: 'case' statement not in switch statement
+  596 |         case 4:
+      |         ^
+main.c:598:13: error: 'break' statement not in loop or switch statement
+  598 |             break;
+      |             ^
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+33 warnings and 20 errors generated.
+[ERROR] Compilation failed. Check output above.

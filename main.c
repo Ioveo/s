@@ -381,6 +381,8 @@ int saia_report_menu(void) {
         size_t count = 0;
         if (file_read_lines(report_path, &lines, &count) == 0) {
             size_t start = (count > 100) ? count - 100 : 0;
+            const char *filter_keyword = "";
+            const char *filter_keyword = "";
             for (size_t i = start; i < count; i++) {
                 if (strlen(filter_keyword) > 0) {
                     if (strstr(lines[i], filter_keyword) == NULL) {
