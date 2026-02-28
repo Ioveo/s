@@ -1,6 +1,11 @@
 
 #include "saia.h"
 
+#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#include <sys/sysctl.h>
+#include <vm/vm_param.h>
+#endif
+
 // ==================== 字符串缓冲区 ====================
 
 string_buffer_t* string_buffer_create(size_t initial_size) {
@@ -250,8 +255,6 @@ int get_available_memory_mb(void) {
     GlobalMemoryStatusEx(&statex);
     return (int)(statex.ullAvailPhys / (1024 * 1024));
 #elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
-    #include <sys/sysctl.h>
-    #include <vm/vm_param.h>
     unsigned int v_free_count = 0;
     size_t sz = sizeof(v_free_count);
     if (sysctlbyname("vm.stats.vm.v_free_count", &v_free_count, &sz, NULL, 0) == 0) {
@@ -302,7 +305,6 @@ int get_cpu_usage(void) {
     return 0;
 #elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
     /* FreeBSD: use sysctl kern.cp_time */
-    #include <sys/sysctl.h>
     static long last_idle = 0, last_total = 0;
     long cp_time[5]; /* user, nice, sys, intr, idle */
     size_t sz = sizeof(cp_time);

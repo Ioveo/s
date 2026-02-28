@@ -263,8 +263,20 @@ extern volatile sig_atomic_t g_reload;
 int main(int argc, char *argv[]);
 void saia_signal_handler(int signum);
 void saia_cleanup(void);
+void saia_print_banner(void);
 int saia_run_audit(void);
 int saia_print_menu(void);
+int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads);
+int saia_config_menu(void);
+int saia_report_menu(void);
+int saia_nodes_menu(void);
+int saia_interactive_mode(void);
+int saia_write_list_file_from_input(const char *file_path, int split_spaces, int append_mode);
+// missing_functions.c
+int saia_backpressure_menu(void);
+int saia_cleanup_menu(void);
+int saia_telegram_menu(void);
+int saia_credentials_menu(void);
 
 // config.c
 int config_init(config_t *cfg, const char *base_dir);

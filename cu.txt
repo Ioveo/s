@@ -1,14 +1,43 @@
-[INFO] Compiling...
-ld: error: undefined symbol: saia_telegram_menu
+[VUyJ3y7DCtUYd4@s16]:<~>$ ^C
+[VUyJ3y7DCtUYd4@s16]:<~>$ cd ~/saia
+[VUyJ3y7DCtUYd4@s16]:<~/saia>$ git pull
+Already up to date.
+[VUyJ3y7DCtUYd4@s16]:<~/saia>$ cc *.c -o saia -lpthread -lm -std=c11
+missing_functions.c:161:17: warning: call to undeclared function 'saia_run_audit_internal'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  161 |                 saia_run_audit_internal(0, 0, 0);
+      |                 ^
+missing_functions.c:165:17: warning: call to undeclared function 'saia_config_menu'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  165 |                 saia_config_menu();
+      |                 ^
+missing_functions.c:169:17: warning: call to undeclared function 'saia_report_menu'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  169 |                 saia_report_menu();
+      |                 ^
+missing_functions.c:177:17: warning: call to undeclared function 'saia_nodes_menu'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  177 |                 saia_nodes_menu();
+      |                 ^
+missing_functions.c:181:17: warning: call to undeclared function 'saia_credentials_menu'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  181 |                 saia_credentials_menu();
+      |                 ^
+missing_functions.c:185:17: warning: call to undeclared function 'saia_telegram_menu'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  185 |                 saia_telegram_menu();
+      |                 ^
+missing_functions.c:314:21: warning: call to undeclared function 'saia_write_list_file_from_input'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  314 |             int n = saia_write_list_file_from_input(g_config.tokens_file, 0, 0);
+      |                     ^
+missing_functions.c:326:21: warning: call to undeclared function 'saia_write_list_file_from_input'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  326 |             int n = saia_write_list_file_from_input(g_config.tokens_file, 0, 1);
+      |                     ^
+missing_functions.c:362:5: warning: call to undeclared function 'saia_print_banner'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  362 |     saia_print_banner();
+      |     ^
+9 warnings generated.
+utils.c:309:9: warning: call to undeclared function 'sysctlbyname'; ISO C99 and later do not support implicit function declarations [-Wimplicit-function-declaration]
+  309 |     if (sysctlbyname("kern.cp_time", cp_time, &sz, NULL, 0) != 0) return -1;
+      |         ^
+1 warning generated.
+ld: error: undefined symbol: saia_write_list_file_from_input
 >>> referenced by missing_functions.c
->>>               /tmp/missing_functions-978160.o:(saia_interactive_mode)
-
-ld: error: undefined symbol: saia_credentials_menu
+>>>               /tmp/missing_functions-d29b36.o:(saia_credentials_menu)
 >>> referenced by missing_functions.c
->>>               /tmp/missing_functions-978160.o:(saia_interactive_mode)
-
-ld: error: undefined symbol: main
->>> referenced by crt1_s.S:66 (/usr/src/lib/csu/amd64/crt1_s.S:66)
->>>               /usr/lib/crt1.o:(_start)
+>>>               /tmp/missing_functions-d29b36.o:(saia_credentials_menu)
 cc: error: linker command failed with exit code 1 (use -v to see invocation)
-[ERROR] Compilation failed. Re-run manually: cd /home/VUyJ3y7DCtUYd4/saia && cc *.c -o saia -lpthread -lm -std=c11

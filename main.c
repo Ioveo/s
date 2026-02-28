@@ -685,7 +685,7 @@ int saia_report_menu(void) {
 
 // ==================== 辅助输入函数 ====================
 
-static int saia_write_list_file_from_input(const char *file_path, int split_spaces, int append_mode) {
+int saia_write_list_file_from_input(const char *file_path, int split_spaces, int append_mode) {
 
     color_cyan();
 
