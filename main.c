@@ -734,6 +734,7 @@ static int saia_write_list_file_from_input(const char *file_path, int split_spac
     int count = 0;
 
     while (fgets(buffer, sizeof(buffer), stdin)) {
+        if (!g_running) break;
 
         char *comment = strchr(buffer, '#');
 
