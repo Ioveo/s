@@ -176,46 +176,48 @@ static http_response_t* http_socket_request(const char *method, const char *url,
     free(req_str);
     string_buffer_free(req);
     
-    // 读取响应
-    string_buffer_t *resp_buf = string_buffer_create(4096);
-    char buf[1024];
+    /* 读取响应 — 按实际字节数追加，避免响应体含 \0 被 strlen 截断 */
+    string_buffer_t *resp_buf = string_buffer_create(8192);
+    char chunk[4096];
     int n;
-    
-    // 简单的读取循环
-    while ((n = socket_recv_until(fd, buf, sizeof(buf), NULL, timeout_ms)) > 0) {
-        string_buffer_append(resp_buf, buf); // 注意：这里假设buf是以null结尾的，实际上recv不保证
-        // 修正：应该按长度追加
-        // 由于string_buffer_append实现是基于字符串的，这里暂时简化
-        // 实际应实现 string_buffer_append_len
+    while ((n = socket_recv_until(fd, chunk, sizeof(chunk), NULL, timeout_ms)) > 0) {
+        string_buffer_append_len(resp_buf, chunk, (size_t)n);
     }
     
     socket_close(fd);
     
     http_response_t *res = (http_response_t *)calloc(1, sizeof(http_response_t));
-    
-    char *raw = string_buffer_to_string(resp_buf);
+
+    size_t raw_size = string_buffer_size(resp_buf);
+    char *raw = string_buffer_to_string(resp_buf); /* malloc+memcpy */
     string_buffer_free(resp_buf);
-    
     if (!raw) return res;
+
     
-    // 分离Header和Body
+    /* 分离 Header 和 Body，按实际 raw_size 计算 body 长度 */
     char *body_sep = strstr(raw, "\r\n\r\n");
     if (body_sep) {
         *body_sep = '\0';
         res->headers = strdup(raw);
-        res->body = strdup(body_sep + 4);
-        res->body_len = strlen(res->body);
-        
-        // 解析状态码
-        char *space = strchr(raw, ' ');
-        if (space) {
-            res->status_code = atoi(space + 1);
+        char *body_start = body_sep + 4;
+        size_t body_len = raw_size - (size_t)(body_start - raw);
+        res->body = (char *)malloc(body_len + 1);
+        if (res->body) {
+            memcpy(res->body, body_start, body_len);
+            res->body[body_len] = '\0';
+            res->body_len = body_len;
         }
+        /* 解析状态码 */
+        char *sp = strchr(raw, ' ');
+        if (sp) res->status_code = atoi(sp + 1);
     } else {
-        res->body = raw; // 整个都是body
+        /* 没有 header 分隔符，整体当 body */
+        res->body = raw;
+        res->body_len = raw_size;
+        raw = NULL; /* 转让所有权，避免 double-free */
     }
-    
-    if (raw != res->body) free(raw);
+    if (raw) free(raw);
+
     
     return res;
 }

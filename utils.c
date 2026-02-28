@@ -52,6 +52,24 @@ int string_buffer_append(string_buffer_t *buf, const char *str) {
     return 0;
 }
 
+/* 按字节数追加，不依赖 strlen，适合二进制数据（HTTP 响应体、SOCKS5 包等） */
+int string_buffer_append_len(string_buffer_t *buf, const char *data, size_t len) {
+    if (!buf || (!data && len > 0)) return -1;
+    if (len == 0) return 0;
+    if (buf->size + len + 1 > buf->capacity) {
+        size_t new_cap = buf->capacity * 2;
+        while (new_cap < buf->size + len + 1) new_cap *= 2;
+        char *nd = (char *)realloc(buf->data, new_cap);
+        if (!nd) return -1;
+        buf->data = nd;
+        buf->capacity = new_cap;
+    }
+    memcpy(buf->data + buf->size, data, len);
+    buf->size += len;
+    buf->data[buf->size] = '\0';
+    return 0;
+}
+
 int string_buffer_appendf(string_buffer_t *buf, const char *fmt, ...) {
     if (!buf || !fmt) return -1;
 
@@ -67,6 +85,14 @@ int string_buffer_appendf(string_buffer_t *buf, const char *fmt, ...) {
 char* string_buffer_to_string(string_buffer_t *buf) {
     if (!buf) return NULL;
     return strdup(buf->data);
+}
+
+/* 返回内部指针（不复制），经济 HTTP 大响应体抷贝 */
+const char* string_buffer_data(const string_buffer_t *buf) {
+    return buf ? buf->data : NULL;
+}
+size_t string_buffer_size(const string_buffer_t *buf) {
+    return buf ? buf->size : 0;
 }
 
 // ==================== 字符串工具函数 ====================
@@ -197,7 +223,38 @@ int str_ends_with(const char *str, const char *suffix) {
     return strcmp(str + str_len - suffix_len, suffix) == 0;
 }
 
-char* str_format(const char *fmt, ...) {
+/* str_replace: 把 src 中所有 old_sub 替换为 new_sub，返回新申请的内存（调用方负责 free） */
+char* str_replace(const char *src, const char *old_sub, const char *new_sub) {
+    if (!src || !old_sub) return strdup(src ? src : "");
+    if (!new_sub) new_sub = "";
+    size_t old_len = strlen(old_sub);
+    size_t new_len = strlen(new_sub);
+    if (old_len == 0) return strdup(src);
+
+    /* 计算出现次数 */
+    size_t count = 0;
+    const char *p = src;
+    while ((p = strstr(p, old_sub)) != NULL) { count++; p += old_len; }
+    if (count == 0) return strdup(src);
+
+    size_t src_len = strlen(src);
+    size_t out_len = src_len + count * (new_len - old_len) + 1;
+    char *out = (char *)malloc(out_len);
+    if (!out) return NULL;
+
+    char *dst = out;
+    p = src;
+    const char *found;
+    while ((found = strstr(p, old_sub)) != NULL) {
+        size_t prefix = found - p;
+        memcpy(dst, p, prefix); dst += prefix;
+        memcpy(dst, new_sub, new_len); dst += new_len;
+        p = found + old_len;
+    }
+    strcpy(dst, p);
+    return out;
+}
+
     if (!fmt) return NULL;
     
     char *result = NULL;
@@ -255,13 +312,18 @@ int get_available_memory_mb(void) {
     GlobalMemoryStatusEx(&statex);
     return (int)(statex.ullAvailPhys / (1024 * 1024));
 #elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
-    unsigned int v_free_count = 0;
-    size_t sz = sizeof(v_free_count);
-    if (sysctlbyname("vm.stats.vm.v_free_count", &v_free_count, &sz, NULL, 0) == 0) {
-        long page_size = sysconf(_SC_PAGESIZE);
-        return (int)((uint64_t)v_free_count * page_size / (1024 * 1024));
-    }
-    return -1;
+    /* 对应 DEJI.py FreeBSD 算法：
+     * available = (v_free_count + v_inactive_count + v_cache_count) * page_size */
+    unsigned int v_free = 0, v_inactive = 0, v_cache = 0;
+    size_t sz = sizeof(v_free);
+    sysctlbyname("vm.stats.vm.v_free_count",     &v_free,     &sz, NULL, 0);
+    sz = sizeof(v_inactive);
+    sysctlbyname("vm.stats.vm.v_inactive_count", &v_inactive, &sz, NULL, 0);
+    sz = sizeof(v_cache);
+    sysctlbyname("vm.stats.vm.v_cache_count",    &v_cache,    &sz, NULL, 0);
+    long page_size = sysconf(_SC_PAGESIZE);
+    if (page_size <= 0) page_size = 4096;
+    return (int)(((uint64_t)(v_free + v_inactive + v_cache) * page_size) / (1024 * 1024));
 #else
     // Linux
     FILE *fp = fopen("/proc/meminfo", "r");

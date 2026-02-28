@@ -343,12 +343,20 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
     if (threads > MAX_THREADS) threads = MAX_THREADS;
 
     // 端口
-
-    printf("\n端口配置 (留空使用默认): ");
-
-    fflush(stdout);
-
-    while (getchar() != '\n');  // 清除之前的输入
+    /* 根据已选模式显示默认端口提示 */
+    {
+        const char *hint =
+            (mode == MODE_XUI)  ? DEFAULT_XUI_PORTS :
+            (mode == MODE_S5)   ? DEFAULT_S5_PORTS  :
+            (mode == MODE_DEEP) ? DEFAULT_MIXED_PORTS :
+                                   DEFAULT_XUI_PORTS;
+        printf("\n%s端口配置%s (留空=自动使用默认)\n",
+               C_CYAN, C_RESET);
+        printf("  默认: %s%.*s...%s\n  输入: ",
+               C_DIM, 60, hint, C_RESET);
+        fflush(stdout);
+    }
+    while (getchar() != '\n');  /* 清除之前的输入 */
 
     if (fgets(input, sizeof(input), stdin)) {
 
@@ -464,31 +472,51 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     }
 
-    // 读取数据文件
+    // 读取节点文件 (原始行)
+    char **raw_nodes = NULL;
+    size_t raw_node_count = 0;
 
-    char **nodes = NULL;
-
-    size_t node_count = 0;
-
-    if (file_read_lines(g_config.nodes_file, &nodes, &node_count) != 0 || node_count == 0) {
-
-        // 尝试备用文件
-
-        file_read_lines("ip.txt", &nodes, &node_count);
-
+    if (file_read_lines(g_config.nodes_file, &raw_nodes, &raw_node_count) != 0
+        || raw_node_count == 0) {
+        /* 备用文件 */
+        free(raw_nodes); raw_nodes = NULL;
+        file_read_lines("ip.txt", &raw_nodes, &raw_node_count);
+        if (raw_node_count == 0) {
+            file_read_lines("nodes.txt", &raw_nodes, &raw_node_count);
+        }
     }
+
+    if (!raw_nodes || raw_node_count == 0) {
+        color_red();
+        printf("\n[错误] 没有找到目标节点!\n");
+        color_reset();
+        printf("请至少满足以下一项:\n");
+        printf("  1. 在主菜单选 [5] 节点管理 -> 导入节点\n");
+        printf("  2. 手动创建文件: echo '1.2.3.4' >> %s\n", g_config.nodes_file);
+        printf("  3. 手动创建文件: echo '1.2.3.0/24' >> ip.txt  (支持 CIDR)↑\n\n");
+        scanner_cleanup(); network_cleanup();
+        return -1;
+    }
+
+    /* 展开 IP 段 / CIDR / 范围 -> 独立单 IP 列表 */
+    char **nodes = NULL;
+    size_t node_count = 0;
+    printf("%s解析 IP 列表...%s 原始行数:%zu\n",
+           C_CYAN, C_RESET, raw_node_count);
+    expand_nodes_list(raw_nodes, raw_node_count, &nodes, &node_count);
+    /* 释放原始行 */
+    for (size_t i = 0; i < raw_node_count; i++) free(raw_nodes[i]);
+    free(raw_nodes);
 
     if (!nodes || node_count == 0) {
-
         color_red();
-
-        printf("错误: 没有找到目标节点 (请检查 nodes.list 或 ip.txt)\n");
-
+        printf("[\u9519\u8bef] IP \u6bb5\u5c55\u5f00\u540e\u65e0\u6709\u6548\u76ee\u6807 (\u8bf7\u68c0\u67e5\u6587\u4ef6\u683c\u5f0f)\n");
         color_reset();
-
+        scanner_cleanup(); network_cleanup();
         return -1;
-
     }
+    printf("%s\u5c55\u5f00\u5b8c\u6210:%s \u5171 %zu \u4e2a\u76ee\u6807 IP\n\n",
+           C_GREEN, C_RESET, node_count);
 
     char **raw_tokens = NULL;
 

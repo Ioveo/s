@@ -235,21 +235,76 @@ void *worker_thread(void *arg) {
                 break; // 找到一个密码就停止
             }
         }
-    } else if (task->work_mode == MODE_XUI) {
-        // 简化版：仅尝试第一组凭据
-        if (task->cred_count > 0) {
-             if (verify_xui(task->ip, task->port, task->creds[0].username, task->creds[0].password, 3000)) {
-                 MUTEX_LOCK(lock_stats);
-                 g_state.total_found++;
-                 MUTEX_UNLOCK(lock_stats);
-                 
-                 char result_line[1024];
-                 snprintf(result_line, sizeof(result_line), "[XUI_FOUND] %s:%d", task->ip, task->port);
-                 MUTEX_LOCK(lock_file);
-                 file_append(g_config.report_file, result_line);
-                 file_append(g_config.report_file, "\n");
-                 MUTEX_UNLOCK(lock_file);
-             }
+    } else if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) {
+        /* XUI 专项 / 深度全能：遍历所有凭据 */
+        for (size_t i = 0; i < task->cred_count; i++) {
+            if (verify_xui(task->ip, task->port,
+                           task->creds[i].username, task->creds[i].password, 3000)) {
+                MUTEX_LOCK(lock_stats);
+                g_state.total_found++;
+                g_state.total_verified++;
+                MUTEX_UNLOCK(lock_stats);
+
+                char result_line[1024];
+                snprintf(result_line, sizeof(result_line),
+                         "[XUI_VERIFIED] [高危-后台沦陷] %s:%d | 账号:%s | 密码:%s | 登录成功",
+                         task->ip, task->port,
+                         task->creds[i].username, task->creds[i].password);
+                MUTEX_LOCK(lock_file);
+                file_append(g_config.report_file, result_line);
+                file_append(g_config.report_file, "\n");
+                printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
+                MUTEX_UNLOCK(lock_file);
+                break;
+            }
+        }
+        /* 深度全能额外跑一遍 S5 */
+        if (task->work_mode == MODE_DEEP) {
+            for (size_t i = 0; i < task->cred_count; i++) {
+                if (verify_socks5(task->ip, task->port,
+                                   task->creds[i].username, task->creds[i].password, 3000)) {
+                    MUTEX_LOCK(lock_stats);
+                    g_state.total_found++;
+                    g_state.total_verified++;
+                    MUTEX_UNLOCK(lock_stats);
+                    char result_line[1024];
+                    snprintf(result_line, sizeof(result_line),
+                             "[S5_VERIFIED] [优质-真穿透] %s:%d | 账号:%s | 密码:%s",
+                             task->ip, task->port,
+                             task->creds[i].username, task->creds[i].password);
+                    MUTEX_LOCK(lock_file);
+                    file_append(g_config.report_file, result_line);
+                    file_append(g_config.report_file, "\n");
+                    printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
+                    MUTEX_UNLOCK(lock_file);
+                    break;
+                }
+            }
+        }
+    } else if (task->work_mode == MODE_VERIFY) {
+        /* 验真模式：同时尝试 XUI + S5 */
+        for (size_t i = 0; i < task->cred_count; i++) {
+            int ok = verify_xui(task->ip, task->port,
+                                task->creds[i].username, task->creds[i].password, 3000);
+            if (!ok) ok = verify_socks5(task->ip, task->port,
+                                         task->creds[i].username, task->creds[i].password, 3000);
+            if (ok) {
+                MUTEX_LOCK(lock_stats);
+                g_state.total_found++;
+                g_state.total_verified++;
+                MUTEX_UNLOCK(lock_stats);
+                char result_line[1024];
+                snprintf(result_line, sizeof(result_line),
+                         "[VERIFIED] %s:%d | 账号:%s | 密码:%s",
+                         task->ip, task->port,
+                         task->creds[i].username, task->creds[i].password);
+                MUTEX_LOCK(lock_file);
+                file_append(g_config.report_file, result_line);
+                file_append(g_config.report_file, "\n");
+                printf("\n%s%s%s\n", C_HOT, result_line, C_RESET);
+                MUTEX_UNLOCK(lock_file);
+                break;
+            }
         }
     }
     
@@ -317,9 +372,18 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
         
         node_idx++;
         
-        // 简单的进度显示
-        if (node_idx % 10 == 0) {
-            printf("\r进度: %zu/%zu (线程: %d) ", node_idx, node_count, current);
+        // 进度显示 (每 50 个节点刷新一次)
+        if (node_idx % 50 == 0 || node_idx == node_count) {
+            MUTEX_LOCK(lock_stats);
+            int rt = running_threads;
+            uint64_t scanned = g_state.total_scanned;
+            uint64_t found   = g_state.total_found;
+            MUTEX_UNLOCK(lock_stats);
+            printf("\r%s进度:%s %zu/%zu  线程:%d  已扫:%llu  命中:%llu   %s",
+                   C_CYAN, C_RESET, node_idx, node_count, rt,
+                   (unsigned long long)scanned,
+                   (unsigned long long)found,
+                   C_RESET);
             fflush(stdout);
         }
     }

@@ -345,9 +345,18 @@ int file_exists(const char *path);
 int file_remove(const char *path);
 size_t file_size(const char *path);
 char* file_read_all(const char *path);
+char* file_read_all_n(const char *path, size_t *size_out); /* 返回实际字节数 */
+
 int file_write_all(const char *path, const char *content);
 int dir_exists(const char *path);
 int dir_create(const char *path);
+
+// string_ops.c
+int expand_ip_range(const char *line, char ***out, size_t *count);
+int expand_nodes_list(char **raw_lines, size_t raw_count, char ***expanded, size_t *exp_count);
+int parse_credentials(const char *line, credential_t *cred);
+int parse_ip_port_user_pass(const char *line, ip_port_t *addr, credential_t *cred);
+
 
 // network.c
 int network_init(void);
