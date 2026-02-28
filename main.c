@@ -677,9 +677,9 @@ static int saia_write_list_file_from_input(const char *file_path, int split_spac
 
     color_reset();
 
-    printf("请输入内容，单独输入 EOF 结束:\n");
+    printf("请输入内容 (粘贴完成后按回车，输入 EOF 再按回车结束):\n");
 
-    char buffer[4096];
+    char buffer[65536];
 
     char tmp_path[4096];
 
@@ -974,8 +974,9 @@ int saia_credentials_menu(void) {
              g_config.base_dir);
 
     printf("  [1] 添加凭据 (用户名:密码)\n");
+    printf("  [2] 从文件导入凭据\n");
 
-    printf("  [2] 查看凭据\n");
+    printf("  [3] 查看凭据\n");
 
     printf("  [0] 返回\n");
 
