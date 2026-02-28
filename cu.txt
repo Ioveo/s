@@ -1,21 +1,137 @@
 [INFO] Compiling...
-main.c:151:67: error: expected expression
-  151 |     printf("  模式: %s (%s)\n", state->mode == 1 ? "XUI专项" :\n\nstate->mode == 2 ? "S5专项" :\n\nstate->mode == 3 ? "深度全能" : "验真模式", state->work_mode == 1 ? "探索" :\n\nstate->work_mode == 2 ? "探索+验真" : "只留极品");
-      |                                                               ^
-main.c:151:192: error: expected expression
-  151 |     printf("  模式: %s (%s)\n", state->mode == 1 ? "XUI专项" :\n\nstate->mode == 2 ? "S5专项" :\n\nstate->mode == 3 ? "深度全能" : "验真模式", state->work_mode == 1 ? "探索" :\n\nstate->work_mode == 2 ? "探索+验真" : "只留极品");
-      |                                                                                                                                                                                ^
-main.c:1204:10: error: expected '}'
- 1204 |         }
+main.c:900:10: error: expected '}'
+  900 |         }
       |          ^
-main.c:1160:21: note: to match this '{'
- 1160 |     switch (choice) {
+main.c:851:21: note: to match this '{'
+  851 |     switch (choice) {
       |                     ^
-main.c:1204:10: error: expected '}'
- 1204 |         }
+main.c:900:10: error: expected '}'
+  900 |         }
       |          ^
-main.c:1122:30: note: to match this '{'
- 1122 | int saia_telegram_menu(void) {
-      |                              ^
-4 errors generated.
-[ERROR] Compilation failed. Check output above.
+main.c:819:27: note: to match this '{'
+  819 | int saia_nodes_menu(void) {
+      |                           ^
+2 errors generated.
+missing_functions.c:6:36: error: use of undeclared identifier 'g_config'
+    6 |     printf("当前状态: %s\n\n", g_config.backpressure.enabled ? "已启用" : "已禁用");
+      |                                ^
+missing_functions.c:9:37: error: use of undeclared identifier 'g_config'
+    9 |     printf("  CPU阈值: %.1f%%\n", g_config.backpressure.cpu_threshold);
+      |                                   ^
+missing_functions.c:10:41: error: use of undeclared identifier 'g_config'
+   10 |     printf("  内存阈值: %.1f MB\n", g_config.backpressure.mem_threshold);
+      |                                     ^
+missing_functions.c:11:36: error: use of undeclared identifier 'g_config'
+   11 |     printf("  最大连接: %d\n", g_config.backpressure.max_connections);
+      |                                ^
+missing_functions.c:12:37: error: use of undeclared identifier 'g_config'
+   12 |     printf("  实时CPU: %.1f%%\n", g_config.backpressure.current_cpu);
+      |                                   ^
+missing_functions.c:13:41: error: use of undeclared identifier 'g_config'
+   13 |     printf("  实时内存: %.1f MB\n", g_config.backpressure.current_mem);
+      |                                     ^
+missing_functions.c:14:36: error: use of undeclared identifier 'g_config'
+   14 |     printf("  当前连接: %d\n", g_config.backpressure.current_connections);
+      |                                ^
+missing_functions.c:15:36: error: use of undeclared identifier 'g_config'
+   15 |     printf("  限流状态: %s\n", g_config.backpressure.is_throttled ? "是" : "否");
+      |                                ^
+missing_functions.c:23:12: error: use of undeclared identifier 'stdout'
+   23 |     fflush(stdout);
+      |            ^
+missing_functions.c:31:13: error: use of undeclared identifier 'g_config'
+   31 |             g_config.backpressure.enabled = !g_config.backpressure.enabled;
+      |             ^
+missing_functions.c:31:46: error: use of undeclared identifier 'g_config'
+   31 |             g_config.backpressure.enabled = !g_config.backpressure.enabled;
+      |                                              ^
+missing_functions.c:32:43: error: use of undeclared identifier 'g_config'
+   32 |             printf("已%s压背控制\n", g_config.backpressure.enabled ? "启用" : "禁用");
+      |                                      ^
+missing_functions.c:33:17: error: use of undeclared identifier 'g_config'
+   33 |             if (g_config.backpressure.enabled) {
+      |                 ^
+missing_functions.c:34:36: error: use of undeclared identifier 'g_config'
+   34 |                 backpressure_init(&g_config.backpressure);
+      |                                    ^
+missing_functions.c:41:20: error: use of undeclared identifier 'g_config'
+   41 |                    g_config.backpressure.cpu_threshold);
+      |                    ^
+missing_functions.c:42:41: error: use of undeclared identifier 'stdin'
+   42 |             fgets(input, sizeof(input), stdin);
+      |                                         ^
+missing_functions.c:44:17: error: use of undeclared identifier 'g_config'
+   44 |                 g_config.backpressure.cpu_threshold = atof(input);
+      |                 ^
+missing_functions.c:48:20: error: use of undeclared identifier 'g_config'
+   48 |                    g_config.backpressure.mem_threshold);
+      |                    ^
+missing_functions.c:49:41: error: use of undeclared identifier 'stdin'
+   49 |             fgets(input, sizeof(input), stdin);
+      |                                         ^
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+20 errors generated.
+missing.c:6:36: error: use of undeclared identifier 'g_config'
+    6 |     printf("当前状态: %s\n\n", g_config.backpressure.enabled ? "已启用" : "已禁用");
+      |                                ^
+missing.c:9:37: error: use of undeclared identifier 'g_config'
+    9 |     printf("  CPU阈值: %.1f%%\n", g_config.backpressure.cpu_threshold);
+      |                                   ^
+missing.c:10:41: error: use of undeclared identifier 'g_config'
+   10 |     printf("  内存阈值: %.1f MB\n", g_config.backpressure.mem_threshold);
+      |                                     ^
+missing.c:11:36: error: use of undeclared identifier 'g_config'
+   11 |     printf("  最大连接: %d\n", g_config.backpressure.max_connections);
+      |                                ^
+missing.c:12:37: error: use of undeclared identifier 'g_config'
+   12 |     printf("  实时CPU: %.1f%%\n", g_config.backpressure.current_cpu);
+      |                                   ^
+missing.c:13:41: error: use of undeclared identifier 'g_config'
+   13 |     printf("  实时内存: %.1f MB\n", g_config.backpressure.current_mem);
+      |                                     ^
+missing.c:14:36: error: use of undeclared identifier 'g_config'
+   14 |     printf("  当前连接: %d\n", g_config.backpressure.current_connections);
+      |                                ^
+missing.c:15:36: error: use of undeclared identifier 'g_config'
+   15 |     printf("  限流状态: %s\n", g_config.backpressure.is_throttled ? "是" : "否");
+      |                                ^
+missing.c:23:12: error: use of undeclared identifier 'stdout'
+   23 |     fflush(stdout);
+      |            ^
+missing.c:31:13: error: use of undeclared identifier 'g_config'
+   31 |             g_config.backpressure.enabled = !g_config.backpressure.enabled;
+      |             ^
+missing.c:31:46: error: use of undeclared identifier 'g_config'
+   31 |             g_config.backpressure.enabled = !g_config.backpressure.enabled;
+      |                                              ^
+missing.c:32:43: error: use of undeclared identifier 'g_config'
+   32 |             printf("已%s压背控制\n", g_config.backpressure.enabled ? "启用" : "禁用");
+      |                                      ^
+missing.c:33:17: error: use of undeclared identifier 'g_config'
+   33 |             if (g_config.backpressure.enabled) {
+      |                 ^
+missing.c:34:36: error: use of undeclared identifier 'g_config'
+   34 |                 backpressure_init(&g_config.backpressure);
+      |                                    ^
+missing.c:41:20: error: use of undeclared identifier 'g_config'
+   41 |                    g_config.backpressure.cpu_threshold);
+      |                    ^
+missing.c:42:41: error: use of undeclared identifier 'stdin'
+   42 |             fgets(input, sizeof(input), stdin);
+      |                                         ^
+missing.c:44:17: error: use of undeclared identifier 'g_config'
+   44 |                 g_config.backpressure.cpu_threshold = atof(input);
+      |                 ^
+missing.c:48:20: error: use of undeclared identifier 'g_config'
+   48 |                    g_config.backpressure.mem_threshold);
+      |                    ^
+missing.c:49:41: error: use of undeclared identifier 'stdin'
+   49 |             fgets(input, sizeof(input), stdin);
+      |                                         ^
+fatal error: too many errors emitted, stopping now [-ferror-limit=]
+20 errors generated.
+scanner.c:176:9: warning: variable 'found' set but not used [-Wunused-but-set-variable]
+  176 |     int found = 0;
+      |         ^
+1 warning generated.
+[ERROR] Compilation failed. Re-run manually: cd /home/VUyJ3y7DCtUYd4/saia && cc *.c -o saia -lpthread -lm -std=c11

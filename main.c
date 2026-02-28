@@ -898,3 +898,7 @@ int saia_nodes_menu(void) {
             }
             break;
         }
+
+    } /* end switch */
+    return 0;
+} /* end saia_nodes_menu */

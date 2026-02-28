@@ -1,3 +1,5 @@
+#include "saia.h"
+
 int saia_backpressure_menu(void) {
     color_yellow();
     printf("\n【压背控制】\n");
@@ -112,31 +114,31 @@ int saia_cleanup_menu(void) {
 
     switch (choice) {
         case 1:
-            snprintf(path, sizeof(path), "%s\\sys_audit_events.log", base);
+            snprintf(path, sizeof(path), "%s/sys_audit_events.log", base);
             if (file_remove(path) == 0) { removed++; }
             printf("已清理 %d 个日志文件\n", removed);
             break;
 
         case 2:
-            snprintf(path, sizeof(path), "%s\\audit_report.log", base);
+            snprintf(path, sizeof(path), "%s/audit_report.log", base);
             if (file_remove(path) == 0) { removed++; }
             printf("已清理 %d 个报告文件\n", removed);
             break;
 
         case 3:
-            snprintf(path, sizeof(path), "%s\\sys_audit_state.json", base);
+            snprintf(path, sizeof(path), "%s/sys_audit_state.json", base);
             if (file_remove(path) == 0) { removed++; }
             printf("已清理 %d 个状态文件\n", removed);
             break;
 
         case 4:
-            snprintf(path, sizeof(path), "%s\\sys_audit_events.log", base);
+            snprintf(path, sizeof(path), "%s/sys_audit_events.log", base);
             if (file_remove(path) == 0) { removed++; }
-            snprintf(path, sizeof(path), "%s\\audit_report.log", base);
+            snprintf(path, sizeof(path), "%s/audit_report.log", base);
             if (file_remove(path) == 0) { removed++; }
-            snprintf(path, sizeof(path), "%s\\sys_audit_state.json", base);
+            snprintf(path, sizeof(path), "%s/sys_audit_state.json", base);
             if (file_remove(path) == 0) { removed++; }
-            snprintf(path, sizeof(path), "%s\\audit_runner.lock", base);
+            snprintf(path, sizeof(path), "%s/audit_runner.lock", base);
             if (file_remove(path) == 0) { removed++; }
             printf("已清理 %d 个文件\n", removed);
             break;

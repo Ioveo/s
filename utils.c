@@ -249,21 +249,29 @@ int get_available_memory_mb(void) {
     statex.dwLength = sizeof(statex);
     GlobalMemoryStatusEx(&statex);
     return (int)(statex.ullAvailPhys / (1024 * 1024));
+#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+    #include <sys/sysctl.h>
+    #include <vm/vm_param.h>
+    unsigned int v_free_count = 0;
+    size_t sz = sizeof(v_free_count);
+    if (sysctlbyname("vm.stats.vm.v_free_count", &v_free_count, &sz, NULL, 0) == 0) {
+        long page_size = sysconf(_SC_PAGESIZE);
+        return (int)((uint64_t)v_free_count * page_size / (1024 * 1024));
+    }
+    return -1;
 #else
+    // Linux
     FILE *fp = fopen("/proc/meminfo", "r");
     if (!fp) return -1;
-    
     char line[256];
     int mem_available = -1;
-    
     while (fgets(line, sizeof(line), fp)) {
         if (str_starts_with(line, "MemAvailable:")) {
             sscanf(line, "MemAvailable: %d kB", &mem_available);
-            mem_available /= 1024;  // 转换为MB
+            mem_available /= 1024;
             break;
         }
     }
-    
     fclose(fp);
     return mem_available;
 #endif
@@ -285,45 +293,57 @@ int get_cpu_usage(void) {
         uint64_t total_diff = total - last_total;
         last_idle = idle;
         last_total = total;
-        
         if (total_diff > 0) {
             return (int)(100 * (1.0 - (double)idle_diff / total_diff));
         }
     }
-    
+    last_idle = idle;
+    last_total = total;
+    return 0;
+#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+    /* FreeBSD: use sysctl kern.cp_time */
+    #include <sys/sysctl.h>
+    static long last_idle = 0, last_total = 0;
+    long cp_time[5]; /* user, nice, sys, intr, idle */
+    size_t sz = sizeof(cp_time);
+    if (sysctlbyname("kern.cp_time", cp_time, &sz, NULL, 0) != 0) return -1;
+    long idle = cp_time[4];
+    long total = cp_time[0] + cp_time[1] + cp_time[2] + cp_time[3] + cp_time[4];
+    if (last_total > 0) {
+        long idle_diff = idle - last_idle;
+        long total_diff = total - last_total;
+        last_idle = idle;
+        last_total = total;
+        if (total_diff > 0) {
+            return (int)(100 * (1.0 - (double)idle_diff / total_diff));
+        }
+    }
     last_idle = idle;
     last_total = total;
     return 0;
 #else
+    // Linux
     static uint64_t last_idle = 0, last_total = 0;
     
     FILE *fp = fopen("/proc/stat", "r");
     if (!fp) return -1;
-    
     char line[256];
     uint64_t user, nice, system, idle;
-    
     if (fgets(line, sizeof(line), fp)) {
         sscanf(line, "cpu %llu %llu %llu %llu", &user, &nice, &system, &idle);
-        
         uint64_t total = user + nice + system + idle;
-        
         if (last_total > 0) {
             uint64_t idle_diff = idle - last_idle;
             uint64_t total_diff = total - last_total;
-            
             last_idle = idle;
             last_total = total;
-            
             if (total_diff > 0) {
                 return (int)(100 * (1.0 - (double)idle_diff / total_diff));
             }
         }
-        
         last_idle = idle;
         last_total = total;
     }
-    
     fclose(fp);
     return 0;
 #endif

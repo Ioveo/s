@@ -69,9 +69,12 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
             return 0;
         }
         
-        char auth_buf[512];
-        int ulen = strlen(user);
-        int plen = strlen(pass);
+        char auth_buf[600]; /* max: 1+1+255+1+255 = 513 bytes for SOCKS5 auth */
+        int ulen = (int)strlen(user);
+        int plen = (int)strlen(pass);
+        /* SOCKS5 RFC 1929: username/password max length is 255 */
+        if (ulen > 255) ulen = 255;
+        if (plen > 255) plen = 255;
         int idx = 0;
         
         auth_buf[idx++] = 0x01; // Version
@@ -174,6 +177,7 @@ void *worker_thread(void *arg) {
 #endif
     worker_arg_t *task = (worker_arg_t *)arg;
     int found = 0;
+    (void)found; /* suppress unused-variable warning */
     
     // 更新扫描统计
     MUTEX_LOCK(lock_stats);

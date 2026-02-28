@@ -344,13 +344,24 @@ int string_buffer_append(string_buffer_t *buf, const char *str);
 int string_buffer_appendf(string_buffer_t *buf, const char *fmt, ...);
 char* string_buffer_to_string(string_buffer_t *buf);
 char* str_trim(char *str);
+char* str_lower(char *str);
+char* str_upper(char *str);
 char* str_replace(char *str, const char *old, const char *replacement);
+char* str_format(const char *fmt, ...);
+char* str_join(char **items, size_t count, const char *separator);
+char** str_split(const char *str, char delimiter, size_t *count);
+int str_equals_ignore_case(const char *a, const char *b);
+int str_contains(const char *haystack, const char *needle);
+int str_starts_with(const char *str, const char *prefix);
+int str_ends_with(const char *str, const char *suffix);
 void get_current_time_str(char *buf, size_t size);
+uint64_t get_current_time_ms(void);
 int get_available_memory_mb(void);
 int get_cpu_usage(void);
 int get_hostname(char *buf, size_t size);
 pid_t get_current_pid(void);
 int is_process_alive(pid_t pid);
+int stop_process(pid_t pid);
 
 // color.c
 void color_reset(void);
@@ -360,6 +371,9 @@ void color_cyan(void);
 void color_green(void);
 void color_yellow(void);
 void color_red(void);
+void color_magenta(void);
+void color_white(void);
+void color_dim(void);
 
 // string_ops.c
 int parse_credentials(const char *line, credential_t *cred);
