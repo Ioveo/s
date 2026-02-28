@@ -2,8 +2,6 @@
 
 #include <locale.h>
 
-
-
 // 全局变量
 
 config_t g_config;
@@ -14,11 +12,7 @@ volatile sig_atomic_t g_running = 1;
 
 volatile sig_atomic_t g_reload = 0;
 
-
-
 // ==================== 信号处理 ====================
-
-
 
 #ifdef _WIN32
 
@@ -45,8 +39,6 @@ BOOL WINAPI saia_console_handler(DWORD dwCtrlType) {
     }
 
 }
-
-
 
 void saia_signal_handler(int signum) {
 
@@ -86,11 +78,7 @@ void saia_signal_handler(int signum) {
 
 #endif
 
-
-
 // ==================== 清理函数 ====================
-
-
 
 void saia_cleanup(void) {
 
@@ -102,23 +90,15 @@ void saia_cleanup(void) {
 
     printf("========================================\n");
 
-
-
     network_cleanup();
 
     scanner_cleanup();
-
-
 
     printf("清理完成. 再见!\n");
 
 }
 
-
-
 // ==================== 打印横幅 ====================
-
-
 
 void saia_print_banner(void) {
 
@@ -144,11 +124,7 @@ void saia_print_banner(void) {
 
 }
 
-
-
 // ==================== 打印统计信息 ====================
-
-
 
 void saia_print_stats(state_t *state) {
 
@@ -162,8 +138,6 @@ void saia_print_stats(state_t *state) {
 
     int seconds = elapsed % 60;
 
-
-
     color_cyan();
 
     color_bold();
@@ -171,8 +145,6 @@ void saia_print_stats(state_t *state) {
     printf("\n【运行统计】\n");
 
     color_reset();
-
-
 
     printf("  运行时间: %02d:%02d:%02d\n", hours, minutes, seconds");
 
@@ -185,8 +157,6 @@ void saia_print_stats(state_t *state) {
     printf("  已发现: %llu\n", (unsigned long long)state->total_found");
 
     printf("  已验证: %llu\n", (unsigned long long)state->total_verified");
-
-
 
     if (g_config.backpressure.enabled) {
 
@@ -206,17 +176,11 @@ void saia_print_stats(state_t *state) {
 
     }
 
-
-
     printf("\n");
 
 }
 
-
-
 // ==================== 交互式菜单 ====================
-
-
 
 int saia_print_menu(void) {
 
@@ -227,8 +191,6 @@ int saia_print_menu(void) {
     printf("═ 功能菜单 ═\n");
 
     color_reset();
-
-
 
     color_white();
 
@@ -253,13 +215,9 @@ int saia_print_menu(void) {
 
     color_reset();
 
-
-
     printf("\n请选择: ");
 
     fflush(stdout);
-
-
 
     int choice;
 
@@ -273,17 +231,11 @@ int saia_print_menu(void) {
 
     while (getchar() != '\n');  // 清除换行符
 
-
-
     return choice;
 
 }
 
-
-
 // ==================== 开始审计 ====================
-
-
 
 int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads) {
 
@@ -293,15 +245,11 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     char ports_raw[1024] = {0};
 
-
-
     color_yellow();
 
     printf("\n【审计配置】\n");
 
     color_reset();
-
-
 
     if (auto_mode > 0) {
 
@@ -331,8 +279,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     scanf("%d", &mode);
 
-
-
     // 选择扫描模式
 
     printf("\n扫描模式:\n");
@@ -349,8 +295,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     scanf("%d", &scan_mode);
 
-
-
     // 线程数
 
     printf("\n并发线程数 [50-2000]: ");
@@ -362,8 +306,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
     if (threads < MIN_CONCURRENT_CONNECTIONS) threads = MIN_CONCURRENT_CONNECTIONS;
 
     if (threads > MAX_THREADS) threads = MAX_THREADS;
-
-
 
     // 端口
 
@@ -385,8 +327,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     }
 
-
-
     // 压背控制
 
     printf("\n启用压背控制? [Y/n]: ");
@@ -398,8 +338,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
         g_config.backpressure.enabled = (toupper(input[0]) != 'N');
 
     }
-
-
 
     if (g_config.backpressure.enabled) {
 
@@ -417,8 +355,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
         }
 
-
-
         printf("内存阈值 [MB] [2048]: ");
 
         fflush(stdout);
@@ -433,15 +369,11 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
         }
 
-
-
         g_config.backpressure.max_connections = threads;
 
     }
 
     }
-
-
 
     // 保存配置
 
@@ -453,8 +385,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     g_config.timeout = DEFAULT_TIMEOUT;
 
-
-
     // 更新状态
 
     strncpy(g_state.ports_raw, ports_raw, sizeof(g_state.ports_raw) - 1);
@@ -465,15 +395,11 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     g_state.threads = threads;
 
-
-
     color_green();
 
     printf("\n配置完成，开始扫描...\n");
 
     color_reset();
-
-
 
     // 初始化
 
@@ -489,8 +415,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     }
 
-
-
     if (scanner_init() != 0) {
 
         color_red();
@@ -504,8 +428,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
         return -1;
 
     }
-
-
 
     // 读取数据文件
 
@@ -521,8 +443,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     }
 
-    
-
     if (!nodes || node_count == 0) {
 
         color_red();
@@ -534,8 +454,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
         return -1;
 
     }
-
-
 
     char **raw_tokens = NULL;
 
@@ -549,13 +467,9 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     }
 
-    
-
     credential_t *creds = NULL;
 
     size_t cred_count = 0;
-
-    
 
     if (raw_tokens && token_lines > 0) {
 
@@ -589,8 +503,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     }
 
-
-
     // 解析端口
 
     uint16_t *ports = NULL;
@@ -607,13 +519,9 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     }
 
-
-
     // 开始扫描
 
     saia_print_banner();
-
-
 
     time(&g_state.start_time);
 
@@ -627,17 +535,11 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     g_state.total_verified = 0;
 
-
-
     // 启动多线程扫描
 
     scanner_start_multithreaded(nodes, node_count, creds, cred_count, ports, port_count);
 
-
-
     strcpy(g_state.status, "completed");
-
-    
 
     // 清理数据
 
@@ -649,25 +551,17 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     if (ports) free(ports);
 
-
-
     // 清理模块
 
     scanner_cleanup();
 
     network_cleanup();
 
-
-
     return 0;
 
 }
 
-
-
 // ==================== 配置菜单 ====================
-
-
 
 int saia_config_menu(void) {
 
@@ -676,8 +570,6 @@ int saia_config_menu(void) {
     printf("\n【配置参数】\n");
 
     color_reset();
-
-
 
     printf("当前配置:\n");
 
@@ -693,17 +585,11 @@ int saia_config_menu(void) {
 
     printf("  暴露密钥: %s\n", g_config.expose_secret ? "是" : "否");
 
-
-
     return 0;
 
 }
 
-
-
 // ==================== 报表菜单 ====================
-
-
 
 int saia_report_menu(void) {
 
@@ -713,15 +599,11 @@ int saia_report_menu(void) {
 
     color_reset();
 
-
-
     char report_path[MAX_PATH_LENGTH];
 
     snprintf(report_path, sizeof(report_path), "%s\\audit_report.log",
 
              g_config.base_dir);
-
-
 
     if (file_exists(report_path)) {
 
@@ -731,13 +613,9 @@ int saia_report_menu(void) {
 
         printf("文件大小: %.2f MB\n", size / (1024.0 * 1024.0)");
 
-
-
         printf("\n最近100行:\n");
 
         printf("----------------------------------------\n");
-
-
 
         char **lines = NULL;
 
@@ -765,8 +643,6 @@ int saia_report_menu(void) {
 
             }
 
-
-
             for (size_t i = 0; i < count; i++) {
 
                 free(lines[i]);
@@ -776,8 +652,6 @@ int saia_report_menu(void) {
             free(lines);
 
         }
-
-
 
         printf("----------------------------------------\n");
 
@@ -789,17 +663,11 @@ int saia_report_menu(void) {
 
     }
 
-
-
     return 0;
 
 }
 
-
-
 // ==================== 辅助输入函数 ====================
-
-
 
 static int saia_write_list_file_from_input(const char *file_path, int split_spaces, int append_mode) {
 
@@ -811,15 +679,11 @@ static int saia_write_list_file_from_input(const char *file_path, int split_spac
 
     printf("请输入内容，单独输入 EOF 结束:\n");
 
-    
-
     char buffer[4096];
 
     char tmp_path[4096];
 
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", file_path);
-
-    
 
     FILE *fp;
 
@@ -837,7 +701,7 @@ static int saia_write_list_file_from_input(const char *file_path, int split_spac
 
                 size_t len = strlen(content);
 
-                if (len > 0 && content[len - 1] != \n') {
+                if (len > 0 && content[len - 1] != '\n') {
 
                     fprintf(fp, "\n");
 
@@ -855,8 +719,6 @@ static int saia_write_list_file_from_input(const char *file_path, int split_spac
 
     }
 
-    
-
     if (!fp) {
 
         color_red();
@@ -869,25 +731,19 @@ static int saia_write_list_file_from_input(const char *file_path, int split_spac
 
     }
 
-    
-
     int count = 0;
 
     while (fgets(buffer, sizeof(buffer), stdin)) {
 
         char *comment = strchr(buffer, '#');
 
-        if (comment) *comment = '';
+        if (comment) *comment = '\0';
 
-        buffer[strcspn(buffer, "
-
-")] = '';
+        buffer[strcspn(buffer, "\n")] = '\0';
 
         char *trimmed = str_trim(buffer);
 
         if (!trimmed) continue;
-
-        
 
         if (strcmp(trimmed, "EOF") == 0) {
 
@@ -895,27 +751,21 @@ static int saia_write_list_file_from_input(const char *file_path, int split_spac
 
         }
 
-        
-
         if (split_spaces) {
 
-            char *token = strtok(trimmed, " 	
-
-");
+            char *token = strtok(trimmed, " \t\n");
 
             while (token != NULL) {
 
                 if (strlen(token) > 0) {
 
-                    fprintf(fp, "%s\n\n, token);
+                    fprintf(fp, "%s\n", token);
 
                     count++;
 
                 }
 
-                token = strtok(NULL, " 	
-
-");
+                token = strtok(NULL, " \t\n");
 
             }
 
@@ -923,7 +773,7 @@ static int saia_write_list_file_from_input(const char *file_path, int split_spac
 
             if (strlen(trimmed) > 0) {
 
-                fprintf(fp, "%s\n\n, trimmed);
+                fprintf(fp, "%s\n", trimmed);
 
                 count++;
 
@@ -935,8 +785,6 @@ static int saia_write_list_file_from_input(const char *file_path, int split_spac
 
     fclose(fp);
 
-    
-
     if (file_exists(file_path)) {
 
         file_remove(file_path);
@@ -945,17 +793,11 @@ static int saia_write_list_file_from_input(const char *file_path, int split_spac
 
     rename(tmp_path, file_path);
 
-    
-
     return count;
 
 }
 
-
-
 // ==================== 节点管理 ====================
-
-
 
 int saia_nodes_menu(void) {
 
@@ -965,8 +807,6 @@ int saia_nodes_menu(void) {
 
     color_reset();
 
-
-
     printf("  [1] 添加节点\n");
 
     printf("  [2] 查看节点\n");
@@ -975,13 +815,9 @@ int saia_nodes_menu(void) {
 
     printf("  [0] 返回\n");
 
-
-
     printf("选择: ");
 
     fflush(stdout);
-
-
 
     int choice;
 
@@ -989,15 +825,11 @@ int saia_nodes_menu(void) {
 
     while (getchar() != '\n');
 
-
-
     char nodes_path[MAX_PATH_LENGTH];
 
     snprintf(nodes_path, sizeof(nodes_path), "%s\\nodes.list",
 
              g_config.base_dir);
-
-
 
     switch (choice) {
 
@@ -1032,8 +864,6 @@ int saia_nodes_menu(void) {
             break;
 
         }
-
-
 
         case 2: {
 
@@ -1091,8 +921,6 @@ int saia_nodes_menu(void) {
 
                     }
 
-
-
                     for (size_t i = 0; i < count; i++) {
 
                         free(lines[i]);
@@ -1113,15 +941,11 @@ int saia_nodes_menu(void) {
 
         }
 
-
-
         case 4:
 
             printf("功能开发中...\n");
 
             break;
-
-
 
         default:
 
@@ -1129,17 +953,11 @@ int saia_nodes_menu(void) {
 
     }
 
-
-
     return 0;
 
 }
 
-
-
 // ==================== 凭据管理 ====================
-
-
 
 int saia_credentials_menu(void) {
 
@@ -1149,15 +967,11 @@ int saia_credentials_menu(void) {
 
     color_reset();
 
-
-
     char tokens_path[MAX_PATH_LENGTH];
 
     snprintf(tokens_path, sizeof(tokens_path), "%s\\tokens.list",
 
              g_config.base_dir);
-
-
 
     printf("  [1] 添加凭据 (用户名:密码)\n");
 
@@ -1165,21 +979,15 @@ int saia_credentials_menu(void) {
 
     printf("  [0] 返回\n");
 
-
-
     printf("选择: ");
 
     fflush(stdout);
-
-
 
     int choice;
 
     scanf("%d", &choice);
 
     while (getchar() != '\n');
-
-
 
     switch (choice) {
 
@@ -1214,8 +1022,6 @@ int saia_credentials_menu(void) {
             break;
 
         }
-
-
 
         case 2: {
 
@@ -1281,8 +1087,6 @@ int saia_credentials_menu(void) {
 
                     }
 
-
-
                     for (size_t i = 0; i < count; i++) {
 
                         free(lines[i]);
@@ -1303,25 +1107,17 @@ int saia_credentials_menu(void) {
 
         }
 
-
-
         default:
 
             return 0;
 
     }
 
-
-
     return 0;
 
 }
 
-
-
 // ==================== Telegram菜单 ====================
-
-
 
 int saia_telegram_menu(void) {
 
@@ -1331,11 +1127,7 @@ int saia_telegram_menu(void) {
 
     color_reset();
 
-
-
     printf("当前状态: %s\n", g_config.telegram_enabled ? "已启用" : "已禁用");
-
-
 
     if (g_config.telegram_enabled) {
 
@@ -1347,8 +1139,6 @@ int saia_telegram_menu(void) {
 
     }
 
-
-
     printf("\n  [1] 启用/禁用\n");
 
     printf("  [2] 配置Bot\n");
@@ -1357,21 +1147,15 @@ int saia_telegram_menu(void) {
 
     printf("  [0] 返回\n");
 
-
-
     printf("选择: ");
 
     fflush(stdout);
-
-
 
     int choice;
 
     scanf("%d", &choice);
 
     while (getchar() != '\n');
-
-
 
     switch (choice) {
 
@@ -1383,13 +1167,9 @@ int saia_telegram_menu(void) {
 
             break;
 
-
-
         case 2: {
 
             char input[512];
-
-
 
             printf("Bot Token: ");
 
@@ -1401,8 +1181,6 @@ int saia_telegram_menu(void) {
 
                     sizeof(g_config.telegram_token) - 1);
 
-
-
             printf("Chat ID: ");
 
             fgets(input, sizeof(input), stdin);
@@ -1413,15 +1191,11 @@ int saia_telegram_menu(void) {
 
                     sizeof(g_config.telegram_chat_id) - 1);
 
-
-
             printf("推送间隔(分钟): ");
 
             fgets(input, sizeof(input), stdin);
 
             g_config.telegram_interval = atoi(input);
-
-
 
             printf("配置已完成\n");
 
