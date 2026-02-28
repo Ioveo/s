@@ -60,7 +60,7 @@ void saia_signal_handler(int signum) {
 
             g_running = 0;
 
-            printf("\n[INT] 收到信号 %d，正在停止...\n", signum");
+            printf("\n[INT] 收到信号 %d，正在停止...\n", signum);
 
             break;
 
@@ -146,17 +146,17 @@ void saia_print_stats(state_t *state) {
 
     color_reset();
 
-    printf("  运行时间: %02d:%02d:%02d\n", hours, minutes, seconds");
+    printf("  运行时间: %02d:%02d:%02d\n", hours, minutes, seconds);
 
-    printf("  模式: %s (%s)\n",\n\nstate->mode == 1 ? "XUI专项" :\n\nstate->mode == 2 ? "S5专项" :\n\nstate->mode == 3 ? "深度全能" : "验真模式",\n\nstate->work_mode == 1 ? "探索" :\n\nstate->work_mode == 2 ? "探索+验真" : "只留极品");
+    printf("  模式: %s (%s)\n", state->mode == 1 ? "XUI专项" :\n\nstate->mode == 2 ? "S5专项" :\n\nstate->mode == 3 ? "深度全能" : "验真模式", state->work_mode == 1 ? "探索" :\n\nstate->work_mode == 2 ? "探索+验真" : "只留极品");
 
-    printf("  并发线程: %d\n", state->threads");
+    printf("  并发线程: %d\n", state->threads);
 
-    printf("  已扫描: %llu\n", (unsigned long long)state->total_scanned");
+    printf("  已扫描: %llu\n", (unsigned long long)state->total_scanned);
 
-    printf("  已发现: %llu\n", (unsigned long long)state->total_found");
+    printf("  已发现: %llu\n", (unsigned long long)state->total_found);
 
-    printf("  已验证: %llu\n", (unsigned long long)state->total_verified");
+    printf("  已验证: %llu\n", (unsigned long long)state->total_verified);
 
     if (g_config.backpressure.enabled) {
 
@@ -166,13 +166,13 @@ void saia_print_stats(state_t *state) {
 
         color_reset();
 
-        printf("  当前CPU: %.1f%%\n", g_config.backpressure.current_cpu");
+        printf("  当前CPU: %.1f%%\n", g_config.backpressure.current_cpu);
 
-        printf("  当前内存: %.1f MB\n", g_config.backpressure.current_mem");
+        printf("  当前内存: %.1f MB\n", g_config.backpressure.current_mem);
 
-        printf("  当前连接: %d/%d\n",\n\ng_config.backpressure.current_connections,\n\ng_config.backpressure.max_connections");
+        printf("  当前连接: %d/%d\n", g_config.backpressure.current_connections, g_config.backpressure.max_connections);
 
-        printf("  限流状态: %s\n",\n\ng_config.backpressure.is_throttled ? "已限流" : "正常");
+        printf("  限流状态: %s\n", g_config.backpressure.is_throttled ? "已限流" : "正常");
 
     }
 
@@ -573,13 +573,13 @@ int saia_config_menu(void) {
 
     printf("当前配置:\n");
 
-    printf("  工作模式: %d\n", g_config.mode");
+    printf("  工作模式: %d\n", g_config.mode);
 
-    printf("  扫描模式: %d\n", g_config.scan_mode");
+    printf("  扫描模式: %d\n", g_config.scan_mode);
 
-    printf("  并发线程: %d\n", g_config.threads");
+    printf("  并发线程: %d\n", g_config.threads);
 
-    printf("  超时: %d 秒\n", g_config.timeout");
+    printf("  超时: %d 秒\n", g_config.timeout);
 
     printf("  Verbose: %s\n", g_config.verbose ? "是" : "否");
 
@@ -609,9 +609,9 @@ int saia_report_menu(void) {
 
         size_t size = file_size(report_path);
 
-        printf("报告文件: %s\n", report_path");
+        printf("报告文件: %s\n", report_path);
 
-        printf("文件大小: %.2f MB\n", size / (1024.0 * 1024.0)");
+        printf("文件大小: %.2f MB\n", size / (1024.0 * 1024.0));
 
         printf("\n最近100行:\n");
 
@@ -639,7 +639,7 @@ int saia_report_menu(void) {
 
                 }
 
-                printf("%s\n", lines[i]");
+                printf("%s\n", lines[i]);
 
             }
 
@@ -655,7 +655,7 @@ int saia_report_menu(void) {
 
         printf("----------------------------------------\n");
 
-        printf("总计: %zu 行\n", count");
+        printf("总计: %zu 行\n", count);
 
     } else {
 
@@ -907,17 +907,17 @@ int saia_nodes_menu(void) {
 
                 if (file_read_lines(nodes_path, &lines, &count) == 0) {
 
-                    printf("共 %zu 个节点:\n", count");
+                    printf("共 %zu 个节点:\n", count);
 
                     for (size_t i = 0; i < count && i < 20; i++) {
 
-                        printf("  %s\n", lines[i]");
+                        printf("  %s\n", lines[i]);
 
                     }
 
                     if (count > 20) {
 
-                        printf("  ... 还有 %zu 个\n", count - 20");
+                        printf("  ... 还有 %zu 个\n", count - 20);
 
                     }
 
@@ -1065,7 +1065,7 @@ int saia_credentials_menu(void) {
 
                 if (file_read_lines(tokens_path, &lines, &count) == 0) {
 
-                    printf("共 %zu 个凭据:\n", count");
+                    printf("共 %zu 个凭据:\n", count);
 
                     for (size_t i = 0; i < count && i < 10; i++) {
 
@@ -1075,7 +1075,7 @@ int saia_credentials_menu(void) {
 
                             *colon = '\0';
 
-                            printf("  用户: %s, 密码: ***\n", lines[i]");
+                            printf("  用户: %s, 密码: ***\n", lines[i]);
 
                         }
 
@@ -1083,7 +1083,7 @@ int saia_credentials_menu(void) {
 
                     if (count > 10) {
 
-                        printf("  ... 还有 %zu 个\n", count - 10");
+                        printf("  ... 还有 %zu 个\n", count - 10);
 
                     }
 
@@ -1131,11 +1131,11 @@ int saia_telegram_menu(void) {
 
     if (g_config.telegram_enabled) {
 
-        printf("Bot Token: %s***\n",\n\ng_config.telegram_token,\n\nstrlen(g_config.telegram_token) > 10 ? "" : "");
+        printf("Bot Token: %s\n", g_config.telegram_token);
 
-        printf("Chat ID: %s\n", g_config.telegram_chat_id");
+        printf("Chat ID: %s\n", g_config.telegram_chat_id);
 
-        printf("推送间隔: %d 分钟\n", g_config.telegram_interval");
+        printf("推送间隔: %d 分钟\n", g_config.telegram_interval);
 
     }
 
