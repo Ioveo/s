@@ -163,15 +163,23 @@ int saia_interactive_mode(void) {
                 printf("退出程序\n");
                 break;
             case 1:
-                printf("%s提示: 扫描中按 Ctrl+C 可中断并返回主菜单%s\n", C_DIM, C_RESET);
                 saia_run_audit_internal(0, 0, 0);
-                /* 扫描结束或被 Ctrl+C 中断后，恢复 g_running 以便返回主菜单 */
-                g_running = 1;
                 saia_flush_stdin();
                 break;
             case 2:
                 color_yellow();
-                printf("\n>>> [2] 手动停止审计 (未实现/TODO)\n");
+                if (strcmp(g_state.status, "running") == 0) {
+                    printf("\n>>> [2] 正在发送停止信号，请稍候...\n");
+                    g_running = 0; /* 这会通知 scanner_start_streaming 停止 */
+                    /* 等待一点时间让线程感知 */
+                    saia_sleep(500); 
+                    /* 恢复 g_running 让主菜单继续工作 */
+                    g_running = 1;
+                    strcpy(g_state.status, "stopped");
+                    printf(">>> 后台扫描已通知停止!\n\n");
+                } else {
+                    printf("\n>>> 当前没有正在运行的审计任务!\n\n");
+                }
                 color_reset();
                 break;
             case 3:

@@ -297,6 +297,45 @@ int saia_print_menu(void) {
 
 // ==================== 开始审计 ====================
 
+typedef struct {
+    char **raw_nodes;
+    size_t raw_node_count;
+    credential_t *creds;
+    size_t cred_count;
+    uint16_t *ports;
+    size_t port_count;
+} background_scanner_arg_t;
+
+#ifdef _WIN32
+unsigned __stdcall background_scanner_thread(void *arg) {
+#else
+void *background_scanner_thread(void *arg) {
+#endif
+    background_scanner_arg_t *bg = (background_scanner_arg_t *)arg;
+    
+    // 执行真正的后台流式扫描
+    scanner_start_streaming(bg->raw_nodes, bg->raw_node_count, bg->creds, bg->cred_count, bg->ports, bg->port_count);
+    
+    strcpy(g_state.status, "completed");
+    
+    // 清理数据
+    for (size_t i = 0; i < bg->raw_node_count; i++) free(bg->raw_nodes[i]);
+    free(bg->raw_nodes);
+    if (bg->creds) free(bg->creds);
+    if (bg->ports) free(bg->ports);
+    free(bg);
+    
+    // 清理模块
+    scanner_cleanup();
+    network_cleanup();
+    
+#ifdef _WIN32
+    return 0;
+#else
+    return NULL;
+#endif
+}
+
 int saia_run_audit(void) {
     return saia_run_audit_internal(0, 0, 0);
 }
@@ -623,9 +662,7 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     }
 
-    // 开始扫描
-
-    saia_print_banner();
+    // 更新状态
 
     time(&g_state.start_time);
 
@@ -639,31 +676,31 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     g_state.total_verified = 0;
 
-    // 流式展开 IP 段并投喂线程池 (对齐 DEJI.py 的 iter_expanded_targets 逐步投喂逻辑)
+    // 分配参数并启动后台扫描线程
+    background_scanner_arg_t *bg = (background_scanner_arg_t *)malloc(sizeof(background_scanner_arg_t));
+    bg->raw_nodes = raw_nodes;
+    bg->raw_node_count = raw_node_count;
+    bg->creds = creds;
+    bg->cred_count = cred_count;
+    bg->ports = ports;
+    bg->port_count = port_count;
 
-    scanner_start_streaming(raw_nodes, raw_node_count, creds, cred_count, ports, port_count);
+    #ifdef _WIN32
+    _beginthreadex(NULL, 0, background_scanner_thread, bg, 0, NULL);
+    #else
+    pthread_t tid;
+    pthread_create(&tid, NULL, background_scanner_thread, bg);
+    pthread_detach(tid);
+    #endif
 
-    strcpy(g_state.status, "completed");
-
-    // 清理数据
-
-    for (size_t i = 0; i < raw_node_count; i++) free(raw_nodes[i]);
-
-    free(raw_nodes);
-
-    if (creds) free(creds);
-
-    if (ports) free(ports);
-
-    // 清理模块
-
-    scanner_cleanup();
-
-    network_cleanup();
+    color_green();
+    printf("\n>>> 核心已在后台启动! 扫描正在进行...\n");
+    printf(">>> 请在主菜单按 [3] 进入实时大屏查看进度!\n\n");
+    color_reset();
 
     return 0;
-
 }
+
 
 // ==================== 配置菜单 ====================
 
