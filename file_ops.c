@@ -253,9 +253,16 @@ int file_read_lines(const char *path, char ***lines, size_t *count) {
         char *newline = strchr(line, '\n');
         if (newline) {
             *newline = '\0';
+            // 去掉末尾的 \r (Windows CRLF)
+            if (newline > line && *(newline - 1) == '\r') {
+                *(newline - 1) = '\0';
+            }
             (*lines)[idx] = strdup(line);
             line = newline + 1;
         } else {
+            // 最后一行也去掉可能的 \r
+            size_t ll = strlen(line);
+            if (ll > 0 && line[ll - 1] == '\r') line[ll - 1] = '\0';
             (*lines)[idx] = strdup(line);
             line = NULL;
         }

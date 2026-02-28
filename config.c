@@ -156,15 +156,19 @@ void config_set_default_ports(work_mode_t mode, uint16_t **ports, size_t *count)
 
     switch (mode) {
         case MODE_XUI:
-            default_port_str = default_xui_ports;
+            default_port_str = DEFAULT_XUI_PORTS;
             break;
         case MODE_S5:
-            default_port_str = default_s5_ports;
+            default_port_str = DEFAULT_S5_PORTS;
             break;
         case MODE_DEEP:
+            default_port_str = DEFAULT_MIXED_PORTS;
+            break;
         case MODE_VERIFY:
+            default_port_str = DEFAULT_MIXED_PORTS;
+            break;
         default:
-            default_port_str = default_xui_ports;
+            default_port_str = DEFAULT_MIXED_PORTS;
             break;
     }
 

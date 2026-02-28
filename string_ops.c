@@ -372,7 +372,7 @@ int expand_ip_range(const char *line, char ***out, size_t *count) {
 
 expand:;
     size_t n = (size_t)(end_ip - start_ip + 1);
-    if (n == 0 || n > 65536) return -1;
+    if (n == 0 || n > 16777216) return -1; /* 最多 /8 = 16M 个 IP, 对应 DEJI.py 无上限 */
 
     char **arr = (char **)malloc(n * sizeof(char *));
     if (!arr) return -1;

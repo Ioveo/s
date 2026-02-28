@@ -501,17 +501,38 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     }
 
-    // 读取节点文件 (原始行)
+    // 读取节点文件 (原始行) — 兼容 DEJI.py 的备用文件搜索顺序
     char **raw_nodes = NULL;
     size_t raw_node_count = 0;
+    const char *used_file = NULL;
 
-    if (file_read_lines(g_config.nodes_file, &raw_nodes, &raw_node_count) != 0
-        || raw_node_count == 0) {
-        /* 备用文件 */
-        free(raw_nodes); raw_nodes = NULL;
-        file_read_lines("ip.txt", &raw_nodes, &raw_node_count);
-        if (raw_node_count == 0) {
-            file_read_lines("nodes.txt", &raw_nodes, &raw_node_count);
+    char path_ip[MAX_PATH_LENGTH], path_IP[MAX_PATH_LENGTH], path_nodes[MAX_PATH_LENGTH];
+    snprintf(path_ip, sizeof(path_ip), "%s/ip.txt", g_config.base_dir);
+    snprintf(path_IP, sizeof(path_IP), "%s/IP.TXT", g_config.base_dir);
+    snprintf(path_nodes, sizeof(path_nodes), "%s/nodes.txt", g_config.base_dir);
+
+    const char *candidates[] = {
+        g_config.nodes_file,  /* base_dir/nodes.list */
+        path_ip,              /* base_dir/ip.txt */
+        path_IP,              /* base_dir/IP.TXT */
+        path_nodes,           /* base_dir/nodes.txt */
+        "ip.txt",             /* 当前目录 */
+        "nodes.txt"           /* 当前目录 */
+    };
+    int ncand = (int)(sizeof(candidates) / sizeof(candidates[0]));
+
+    for (int ci = 0; ci < ncand; ci++) {
+        if (!candidates[ci]) continue;
+        if (raw_nodes) {
+            for (size_t ri = 0; ri < raw_node_count; ri++) free(raw_nodes[ri]);
+            free(raw_nodes);
+            raw_nodes = NULL;
+            raw_node_count = 0;
+        }
+        if (file_read_lines(candidates[ci], &raw_nodes, &raw_node_count) == 0
+            && raw_node_count > 0) {
+            used_file = candidates[ci];
+            break;
         }
     }
 
@@ -527,25 +548,13 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
         return -1;
     }
 
-    /* 展开 IP 段 / CIDR / 范围 -> 独立单 IP 列表 */
-    char **nodes = NULL;
-    size_t node_count = 0;
-    printf("%s解析 IP 列表...%s 原始行数:%zu\n",
-           C_CYAN, C_RESET, raw_node_count);
-    expand_nodes_list(raw_nodes, raw_node_count, &nodes, &node_count);
-    /* 释放原始行 */
-    for (size_t i = 0; i < raw_node_count; i++) free(raw_nodes[i]);
-    free(raw_nodes);
-
-    if (!nodes || node_count == 0) {
-        color_red();
-        printf("[\u9519\u8bef] IP \u6bb5\u5c55\u5f00\u540e\u65e0\u6709\u6548\u76ee\u6807 (\u8bf7\u68c0\u67e5\u6587\u4ef6\u683c\u5f0f)\n");
-        color_reset();
-        scanner_cleanup(); network_cleanup();
-        return -1;
+    /* 流式展开 IP 段 — 不再一次性 malloc 全部 IP，而是传给 scanner_start_streaming 逐行展开 */
+    printf("%s解析 IP 列表...%s 原始行数:%zu  来源: %s\n",
+           C_CYAN, C_RESET, raw_node_count, used_file ? used_file : "?");
+    /* 调试: 打印前 3 行原始内容 */
+    for (size_t di = 0; di < raw_node_count && di < 3; di++) {
+        printf("  [调试] 原始行[%zu]: \"%s\"\n", di, raw_nodes[di] ? raw_nodes[di] : "(null)");
     }
-    printf("%s\u5c55\u5f00\u5b8c\u6210:%s \u5171 %zu \u4e2a\u76ee\u6807 IP\n\n",
-           C_GREEN, C_RESET, node_count);
 
     char **raw_tokens = NULL;
 
@@ -627,17 +636,17 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     g_state.total_verified = 0;
 
-    // 启动多线程扫描
+    // 流式展开 IP 段并投喂线程池 (对齐 DEJI.py 的 iter_expanded_targets 逐步投喂逻辑)
 
-    scanner_start_multithreaded(nodes, node_count, creds, cred_count, ports, port_count);
+    scanner_start_streaming(raw_nodes, raw_node_count, creds, cred_count, ports, port_count);
 
     strcpy(g_state.status, "completed");
 
     // 清理数据
 
-    for (size_t i = 0; i < node_count; i++) free(nodes[i]);
+    for (size_t i = 0; i < raw_node_count; i++) free(raw_nodes[i]);
 
-    free(nodes);
+    free(raw_nodes);
 
     if (creds) free(creds);
 
