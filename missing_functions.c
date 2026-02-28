@@ -373,37 +373,6 @@ static int visible_width(const char *s) {
     return w;
 }
 
-/* 渲染渐变进度条，返回静态内部缓冲区（调用不需游离）*/
-static const char *render_progress_bar(int done, int total, int width) {
-    static char buf[256];
-    if (total <= 0) {
-        snprintf(buf, sizeof(buf), "%s[%s%.*s%s] --.-%%%s",
-                 C_BLUE, C_DIM,
-                 width, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
-                 C_RESET, C_RESET);
-        return buf;
-    }
-    double ratio = (double)done / total;
-    if (ratio < 0.0) ratio = 0.0;
-    if (ratio > 1.0) ratio = 1.0;
-    int fill = (int)(width * ratio);
-    char bar[160] = {0};
-    int pos = 0;
-    /* 绿色已填充 */
-    pos += snprintf(bar + pos, sizeof(bar) - pos, "%s", C_GREEN);
-    for (int i = 0; i < fill && pos < (int)sizeof(bar) - 10; i++)
-        pos += snprintf(bar + pos, sizeof(bar) - pos, "━");
-    /* 暗色未填充 */
-    pos += snprintf(bar + pos, sizeof(bar) - pos, "%s", C_DIM);
-    for (int i = fill; i < width && pos < (int)sizeof(bar) - 10; i++)
-        pos += snprintf(bar + pos, sizeof(bar) - pos, "━");
-    pos += snprintf(bar + pos, sizeof(bar) - pos, "%s", C_RESET);
-    snprintf(buf, sizeof(buf), "%s[%s%s] %5.1f%%%s",
-             C_BLUE, bar, C_BLUE,
-             ratio * 100.0, C_RESET);
-    return buf;
-}
-
 /* 单行带边框输出，自动补齐 */
 static void render_panel_line(const char *text, int inner) {
     int w = visible_width(text);

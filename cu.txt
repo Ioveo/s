@@ -1,64 +1,10 @@
 [INFO] Compiling...
-missing_functions.c:447:52: error: too many arguments to function call, expected single argument 'path', have 2 arguments
-  447 |     char *raw = file_read_all(g_config.state_file, &fsz);
-      |                 ~~~~~~~~~~~~~                      ^~~~
-./saia.h:347:7: note: 'file_read_all' declared here
-  347 | char* file_read_all(const char *path);
-      |       ^             ~~~~~~~~~~~~~~~~
-1 error generated.
-utils.c:227:7: error: conflicting types for 'str_replace'
-  227 | char* str_replace(const char *src, const char *old_sub, const char *new_sub) {
-      |       ^
-./saia.h:419:7: note: previous declaration is here
-  419 | char* str_replace(char *str, const char *old, const char *replacement);
-      |       ^
-utils.c:258:5: error: expected identifier or '('
-  258 |     if (!fmt) return NULL;
-      |     ^
-utils.c:262:14: warning: type specifier missing, defaults to 'int'; ISO C99 and later do not support implicit int [-Wimplicit-int]
-  262 |     va_start(args, fmt);
-      |              ^
-utils.c:262:20: warning: type specifier missing, defaults to 'int'; ISO C99 and later do not support implicit int [-Wimplicit-int]
-  262 |     va_start(args, fmt);
-      |                    ^
-utils.c:262:5: warning: type specifier missing, defaults to 'int'; ISO C99 and later do not support implicit int [-Wimplicit-int]
-  262 |     va_start(args, fmt);
-      |     ^
-      |     int
-/usr/include/sys/_stdarg.h:42:28: note: expanded from macro 'va_start'
-   42 | #define va_start(ap, last)      __builtin_va_start((ap), (last))
-      |                                 ^
-utils.c:262:5: error: cannot redeclare builtin function '__builtin_va_start'
-/usr/include/sys/_stdarg.h:42:28: note: expanded from macro 'va_start'
-   42 | #define va_start(ap, last)      __builtin_va_start((ap), (last))
-      |                                 ^
-utils.c:78:5: note: '__builtin_va_start' is a builtin with type 'void (struct __va_list_tag *, ...)'
-   78 |     va_start(args, fmt);
-      |     ^
-/usr/include/sys/_stdarg.h:42:28: note: expanded from macro 'va_start'
-   42 | #define va_start(ap, last)      __builtin_va_start((ap), (last))
-      |                                 ^
-utils.c:264:34: error: use of undeclared identifier 'fmt'
-  264 |     int len = vsnprintf(NULL, 0, fmt, args);
-      |                                  ^
-utils.c:265:5: warning: type specifier missing, defaults to 'int'; ISO C99 and later do not support implicit int [-Wimplicit-int]
-  265 |     va_end(args);
-      |     ^
-      |     int
-/usr/include/sys/_stdarg.h:48:21: note: expanded from macro 'va_end'
-   48 | #define va_end(ap)              __builtin_va_end(ap)
-      |                                 ^
-utils.c:265:12: error: a parameter list without types is only allowed in a function definition
-  265 |     va_end(args);
-      |            ^
-utils.c:267:5: error: expected identifier or '('
-  267 |     if (len > 0) {
-      |     ^
-utils.c:276:5: error: expected identifier or '('
-  276 |     return result;
-      |     ^
-utils.c:277:1: error: extraneous closing brace ('}')
-  277 | }
-      | ^
-4 warnings and 8 errors generated.
+missing_functions.c:377:20: warning: unused function 'render_progress_bar' [-Wunused-function]
+  377 | static const char *render_progress_bar(int done, int total, int width) {
+      |                    ^~~~~~~~~~~~~~~~~~~
+1 warning generated.
+ld: error: undefined symbol: file_read_all_n
+>>> referenced by missing_functions.c
+>>>               /tmp/missing_functions-71e7c8.o:(saia_realtime_monitor)
+cc: error: linker command failed with exit code 1 (use -v to see invocation)
 [ERROR] Compilation failed. Re-run manually: cd /home/VUyJ3y7DCtUYd4/saia && cc *.c -o saia -lpthread -lm -std=c11

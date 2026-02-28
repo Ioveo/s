@@ -99,6 +99,43 @@ char* file_read_all(const char *path) {
     return content;
 }
 
+// ==================== 读取所有内容 (含大小) ====================
+
+char* file_read_all_n(const char *path, size_t *size_out) {
+    if (!path) {
+        if (size_out) *size_out = 0;
+        return NULL;
+    }
+
+    size_t size = file_size(path);
+    if (size == 0) {
+        if (size_out) *size_out = 0;
+        char *empty = malloc(1);
+        if (empty) empty[0] = '\0';
+        return empty;
+    }
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
+        if (size_out) *size_out = 0;
+        return NULL;
+    }
+
+    char *content = malloc(size + 1);
+    if (!content) {
+        fclose(fp);
+        if (size_out) *size_out = 0;
+        return NULL;
+    }
+
+    size_t read = fread(content, 1, size, fp);
+    content[read] = '\0';
+    fclose(fp);
+
+    if (size_out) *size_out = read;
+    return content;
+}
+
 // ==================== 写入全部内容 ====================
 
 int file_write_all(const char *path, const char *content) {
