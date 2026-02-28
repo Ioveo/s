@@ -285,28 +285,33 @@ int expand_ip_range(const char *line, char ***out, size_t *count) {
     while (e > s && isspace((unsigned char)*e)) *e-- = '\0';
     if (!*s || *s == '#') return -1;
 
-    /* 寻找主 IP 段与后缀（比如 /24:8080 的 :8080） */
-    char ip_part[256];
+    /* 寻找主 IP 段与后缀（比如 /24:8080 的 :8080， 或者 1.2.3.1-254 后的特殊字符）
+     * 策略：从后往前找最后一个 ':'，由于 IPv6 本项目暂不重点支持，直接以最后冒号为准。
+     * 并且后缀也可能是 username:password@这种放在前面的，但先分离尾部后缀。
+     */
+    char ip_part[512] = {0};
     char suffix[256] = "";
+    strncpy(ip_part, s, sizeof(ip_part) - 1);
     
-    /* 找出第一个不在 CIDR 或范围表示内的冒号，作为可能后缀起点 */
+    // 定位可能是 port 相关的尾部冒号
     char *colon = NULL;
-    /* 特别处理 /24:80 这种格式 */
-    char *slash = strchr(s, '/');
+    char *slash = strchr(ip_part, '/');
+    char *dash = strchr(ip_part, '-');
+    
     if (slash) {
         colon = strchr(slash, ':');
+    } else if (dash) {
+        colon = strchr(dash, ':');
     } else {
-        char *dash = strchr(s, '-');
-        if (dash) colon = strchr(dash, ':');
-        else colon = strchr(s, ':');
+        // 对于没有任何范围符号的单IP，比如 1.1.1.1:80，直接找首个或最后一个冒号
+        // 为了防备 user:pass@1.1.1.1:80 这种结构（实际上该结构不由本函数管，但以防万一），保守找末尾冒号。
+        colon = strrchr(ip_part, ':');
     }
 
     if (colon) {
         strncpy(suffix, colon, sizeof(suffix) - 1);
         *colon = '\0';
     }
-    strncpy(ip_part, s, sizeof(ip_part) - 1);
-    ip_part[sizeof(ip_part) - 1] = '\0';
 
     uint32_t start_ip = 0, end_ip = 0;
 
@@ -329,7 +334,7 @@ int expand_ip_range(const char *line, char ***out, size_t *count) {
         goto expand;
     }
 
-    char *dash = strchr(ip_part, '-');
+    dash = strchr(ip_part, '-');
     if (dash) {
         *dash = '\0';
         const char *rhs = dash + 1;
