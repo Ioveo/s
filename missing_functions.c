@@ -444,7 +444,7 @@ int saia_realtime_monitor(void) {
 
     /* 读取 JSON 状态文件 */
     size_t fsz = 0;
-    char *raw = file_read_all(g_config.state_file, &fsz);
+    char *raw = file_read_all_n(g_config.state_file, &fsz);
     if (!raw) {
         printf("%s审计进程未运行（%s 不存在）%s\n",
                C_DIM, g_config.state_file, C_RESET);

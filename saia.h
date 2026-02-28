@@ -416,7 +416,7 @@ char* string_buffer_to_string(string_buffer_t *buf);
 char* str_trim(char *str);
 char* str_lower(char *str);
 char* str_upper(char *str);
-char* str_replace(char *str, const char *old, const char *replacement);
+char* str_replace(const char *src, const char *old, const char *replacement);
 char* str_format(const char *fmt, ...);
 char* str_join(char **items, size_t count, const char *separator);
 char** str_split(const char *str, char delimiter, size_t *count);

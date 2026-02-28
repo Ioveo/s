@@ -255,6 +255,7 @@ char* str_replace(const char *src, const char *old_sub, const char *new_sub) {
     return out;
 }
 
+char* str_format(const char *fmt, ...) {
     if (!fmt) return NULL;
     
     char *result = NULL;
