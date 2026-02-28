@@ -47,17 +47,24 @@ void backpressure_update(backpressure_state_t *state) {
         mem_low = 1;
     }
     
-    state->is_throttled = (cpu_high || mem_low || 
-                          state->current_connections > state->max_connections);
+    state->is_throttled = (cpu_high || mem_low);
+    /* 注意: 不再把 current_connections > max_connections 作为限流判断,
+     * 因为 scanner 本身已通过 running_threads < g_config.threads 控制 */
     
-    // 自动调整最大连接数
-    if (state->is_throttled && state->max_connections > MIN_CONCURRENT_CONNECTIONS) {
-        state->max_connections -= 50;
-        if (state->max_connections < MIN_CONCURRENT_CONNECTIONS) {
-            state->max_connections = MIN_CONCURRENT_CONNECTIONS;
+    // 自动调整最大连接数 — 温和调整，避免过度压缩
+    int min_floor = g_config.threads / 2; /* 最低不能低于用户设定值的一半 */
+    if (min_floor < MIN_CONCURRENT_CONNECTIONS) min_floor = MIN_CONCURRENT_CONNECTIONS;
+    
+    if (state->is_throttled && state->max_connections > min_floor) {
+        state->max_connections -= 10; /* 每次只减少10，温和降级 */
+        if (state->max_connections < min_floor) {
+            state->max_connections = min_floor;
         }
-    } else if (!state->is_throttled && state->max_connections < MAX_CONCURRENT_CONNECTIONS) {
-        state->max_connections += 20;
+    } else if (!state->is_throttled && state->max_connections < g_config.threads) {
+        state->max_connections += 50; /* 快速恢复 */
+        if (state->max_connections > g_config.threads) {
+            state->max_connections = g_config.threads;
+        }
     }
 }
 

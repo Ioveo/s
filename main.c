@@ -455,6 +455,9 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     g_config.threads = threads;
 
+    /* 始终同步背压上限 = 用户设定线程数 */
+    g_config.backpressure.max_connections = threads;
+
     g_config.timeout = DEFAULT_TIMEOUT;
 
     // 更新状态
