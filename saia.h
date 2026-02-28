@@ -378,6 +378,8 @@ http_response_t* http_get(const char *url, int timeout_ms);
 http_response_t* http_post(const char *url, const char *data, int timeout_ms);
 void http_response_free(http_response_t *res);
 int http_parse_url(const char *url, char *host, int *port, char *path, int *ssl);
+int send_telegram_message(const char *token, const char *chat_id, const char *text);
+int push_telegram(const char *message);
 
 // scanner.c
 int scanner_init(void);

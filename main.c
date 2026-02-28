@@ -191,12 +191,10 @@ void saia_print_stats(state_t *state) {
 // ==================== 交互式菜单 ====================
 
 int saia_print_menu(void) {
-    /* 清屏
-    printf("\x1b[H\x1b[J"); */
-
-    /* 实时读取审计状态 */
     const char *bdr = C_BLUE;
     const int inner = 74;
+
+    printf("\x1b[H\x1b[J");
 
     /* 上边框 */
     printf("%s┏", bdr);
@@ -218,18 +216,24 @@ int saia_print_menu(void) {
     printf("%s┃ %s「运行」%-*s%s┃" C_RESET "\n",
            bdr, C_CYAN, inner - 7, "", bdr);
 
-    /* 运行区两列菜单 */
+    /* 运行区三列菜单 */
     printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
            bdr,
            C_HOT,  " 1. 开始审计扫描",
-           C_WHITE, " 2. 配置参数",
+           C_WHITE, " 2. 手动停止审计",
            C_WHITE, " 3. 实时监控",
            bdr);
     printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
            bdr,
-           C_WHITE, " 4. 待指定: XUI面板查看",
-           C_WHITE, " 5. 待指定: S5面板查看",
+           C_WHITE, " 4. XUI面板查看",
+           C_WHITE, " 5. S5面板查看",
            C_WHITE, " 6. 小鸡资源展示",
+           bdr);
+    printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
+           bdr,
+           C_WHITE, " 7. 启动守护进程",
+           C_WHITE, " 8. 停止守护进程",
+           C_WHITE, "  ",
            bdr);
 
     /* 分隔行 */
@@ -237,20 +241,41 @@ int saia_print_menu(void) {
     for (int i = 0; i < inner; i++) printf("━");
     printf("┫" C_RESET "\n");
 
-    /* 数据/配置区 */
-    printf("%s┃ %s「配置与数据」%-*s%s┃" C_RESET "\n",
-           bdr, C_CYAN, inner - 13, "", bdr);
+    /* 配置区 */
+    printf("%s┃ %s「配置」%-*s%s┃" C_RESET "\n",
+           bdr, C_CYAN, inner - 7, "", bdr);
     printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
            bdr,
-           C_WHITE, " 5. 节点管理",
-           C_WHITE, " 6. 凭据管理",
-           C_WHITE, " 7. Telegram推送",
+           C_WHITE, "10. 断点续连",
+           C_WHITE, "11. 进料加速",
+           C_HOT,   "12. TG推送配置",
+           bdr);
+
+    /* 分隔行 */
+    printf("%s┣", bdr);
+    for (int i = 0; i < inner; i++) printf("━");
+    printf("┫" C_RESET "\n");
+
+    /* 数据区 */
+    printf("%s┃ %s「数据」%-*s%s┃" C_RESET "\n",
+           bdr, C_CYAN, inner - 7, "", bdr);
+    printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
+           bdr,
+           C_WHITE, "13. 更换IP列表",
+           C_WHITE, "14. 更新Tokens",
+           C_WHITE, "15. 系统日志",
            bdr);
     printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
            bdr,
-           C_WHITE, " 8. 压背控制",
-           C_WHITE, " 3. 查看报表",
-           C_WHITE, " 9. 清理数据",
+           C_WHITE, "16. 分类清理",
+           C_WHITE, "17. 无L7列表",
+           C_WHITE, "18. 一键清理",
+           bdr);
+    printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
+           bdr,
+           C_WHITE, "19. 初始化",
+           C_WHITE, "20. 项目备注",
+           C_WHITE, "21. IP库管理",
            bdr);
 
     /* 下边框 */
@@ -258,7 +283,7 @@ int saia_print_menu(void) {
     for (int i = 0; i < inner; i++) printf("━");
     printf("┛" C_RESET "\n");
 
-    printf("%s[ 0 ]退出程序%s   请输入选项: ", C_DIM, C_RESET);
+    printf("%s[ 0 ] 退出程序%s   请输入选项: ", C_DIM, C_RESET);
     fflush(stdout);
 
     int choice;
@@ -896,56 +921,125 @@ int saia_nodes_menu(void) {
              g_config.base_dir);
 
     switch (choice) {
-
-        case 1: {
-
-            color_cyan();
-
-            printf(">>> 更换 IP 列表\n");
-
+        case 0:
+            g_running = 0;
+            break;
+        case 1:
+            saia_run_audit();
+            saia_flush_stdin();
+            break;
+        case 2:
+            color_yellow();
+            printf("\n>>> [2] 手动停止审计 (未实现/TODO)\n");
             color_reset();
-
+            break;
+        case 3:
+            saia_realtime_monitor();
+            break;
+        case 4:
+            color_yellow();
+            printf("\n>>> [4] XUI 面板查看 (未实现/TODO)\n");
+            color_reset();
+            break;
+        case 5:
+            color_yellow();
+            printf("\n>>> [5] S5 面板查看 (未实现/TODO)\n");
+            color_reset();
+            break;
+        case 6:
+            color_yellow();
+            printf("\n>>> [6] 小鸡资源展示 (未实现/TODO)\n");
+            color_reset();
+            break;
+        case 7:
+            color_yellow();
+            printf("\n>>> [7] 启动守护进程 (未实现/TODO)\n");
+            color_reset();
+            break;
+        case 8:
+            color_yellow();
+            printf("\n>>> [8] 停止守护进程 (未实现/TODO)\n");
+            color_reset();
+            break;
+        case 10:
+            color_yellow();
+            printf("\n>>> [10] 断点续连 (未实现/TODO)\n");
+            color_reset();
+            break;
+        case 11:
+            color_yellow();
+            printf("\n>>> [11] 进料加速 (未实现/TODO)\n");
+            color_reset();
+            break;
+        case 12:
+            saia_telegram_menu();
+            break;
+        case 13: {
+            char nodes_path[MAX_PATH_LENGTH];
+            snprintf(nodes_path, sizeof(nodes_path), "%s/nodes.list", g_config.base_dir);
+            color_cyan();
+            printf(">>> [13] 更换IP列表\n");
+            color_reset();
             int count = saia_write_list_file_from_input(nodes_path, 1, 0);
-
             if (count >= 0) {
-
                 color_green();
-
                 printf(">>> IP 列表已更新，本次写入 %d 条\n\n", count);
-
                 color_reset();
-
             } else {
-
                 color_red();
-
                 printf(">>> 写入失败或已取消\n");
-
                 color_reset();
-
             }
-
             break;
-
         }
-
-        case 2: {
-            color_cyan();
-            printf(">>> 添加 IP 节点\n");
+        case 14:
+            color_yellow();
+            printf("\n>>> [14] 更新 Tokens (未实现/TODO)\n");
             color_reset();
-            int count = saia_write_list_file_from_input(nodes_path, 1, 1);
-            if (count >= 0) {
-                color_green();
-                printf(">>> 节点已追加，本次追加 %d 条\n", count);
-                color_reset();
-            } else {
-                color_red();
-                printf(">>> 追加失败或已取消\n");
-                color_reset();
-            }
             break;
-        }
-
+        case 15:
+            saia_report_menu();
+            break;
+        case 16:
+            saia_cleanup_menu();
+            break;
+        case 17:
+            color_yellow();
+            printf("\n>>> [17] 无 L7 列表 (未实现/TODO)\n");
+            color_reset();
+            break;
+        case 18:
+            color_yellow();
+            printf("\n>>> [18] 一键清理 (未实现/TODO)\n");
+            color_reset();
+            break;
+        case 19:
+            color_yellow();
+            printf("\n>>> [19] 初始化 (未实现/TODO)\n");
+            color_reset();
+            break;
+        case 20:
+            color_yellow();
+            printf("\n>>> [20] 项目备注 (未实现/TODO)\n");
+            color_reset();
+            break;
+        case 21:
+            color_yellow();
+            printf("\n>>> [21] IP 库管理 (未实现/TODO)\n");
+            color_reset();
+            break;
+        default:
+            color_red();
+            printf("\n无效的选项: %d\n", choice);
+            color_reset();
+            break;
     } /* end switch */
+    
+    if (choice != 0) {
+        printf("\n按回车键继续...");
+        fflush(stdout);
+        while (getchar() != '\n');
+    }
+
     return 0;
-} /* end saia_nodes_menu */
+} /* end main or menu fn wrapper */

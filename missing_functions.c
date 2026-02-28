@@ -233,6 +233,7 @@ int saia_telegram_menu(void) {
     printf("  [2] 配置 Bot Token\n");
     printf("  [3] 配置 Chat ID\n");
     printf("  [4] 配置推送间隔 (分钟)\n");
+    printf("  [5] 发送测试消息\n");
     printf("  [0] 返回\n");
     printf("选择: ");
     fflush(stdout);
@@ -273,6 +274,17 @@ int saia_telegram_menu(void) {
                 printf("已更新为 %d 分钟\n", g_config.telegram_interval);
             }
             break;
+        case 5: {
+            if (!g_config.telegram_enabled) {
+                printf("请先启用 TG 推送。\n");
+                break;
+            }
+            printf("正在发送测试消息...\n");
+            int ret = push_telegram("<b>SAIA 通知</b>\n\nTG 推送测试成功，当前版本 " SAIA_VERSION " 运行正常。");
+            if (ret == 0) printf("消息发送请求已执行(请查看是否收到)。\n");
+            else printf("消息发送请求下发失败。\n");
+            break;
+        }
         default:
             break;
     }

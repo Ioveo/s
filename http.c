@@ -231,3 +231,39 @@ http_response_t* http_get(const char *url, int timeout_ms) {
 http_response_t* http_post(const char *url, const char *data, int timeout_ms) {
     return http_socket_request("POST", url, data, timeout_ms);
 }
+
+// ==================== Telegram 推送接口 ====================
+
+int send_telegram_message(const char *token, const char *chat_id, const char *text) {
+    if (!token || !chat_id || !text || strlen(token) == 0 || strlen(chat_id) == 0) return -1;
+    
+    char url[512];
+    snprintf(url, sizeof(url), "https://api.telegram.org/bot%s/sendMessage", token);
+    
+    // 构造请求数据 (假设我们直接使用 curl，也可以用 cJSON)
+    // -F chat_id="..." -F text="..." -F parse_mode="html"
+    string_buffer_t *cmd = string_buffer_create(2048);
+    string_buffer_appendf(cmd, "curl -s -X POST \"%s\" ", url);
+    string_buffer_appendf(cmd, "-F \"chat_id=%s\" ", chat_id);
+    string_buffer_append(cmd, "-F \"parse_mode=html\" ");
+    
+    // 将 text 进行转义 (为了安全放在文件里供 curl 读取)
+    char tmp_body[MAX_PATH_LENGTH];
+    snprintf(tmp_body, sizeof(tmp_body), "tg_msg_%d.tmp", get_current_pid());
+    file_write_all(tmp_body, text);
+    
+    string_buffer_appendf(cmd, "-F \"text=<%s\" ", tmp_body);
+    
+    char *cmd_str = string_buffer_to_string(cmd);
+    int ret = system(cmd_str);
+    free(cmd_str);
+    string_buffer_free(cmd);
+    file_remove(tmp_body);
+    
+    return ret == 0 ? 0 : -1;
+}
+
+int push_telegram(const char *message) {
+    if (!g_config.telegram_enabled) return 0;
+    return send_telegram_message(g_config.telegram_token, g_config.telegram_chat_id, message);
+}

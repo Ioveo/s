@@ -88,71 +88,86 @@ int parse_credentials(const char *line, credential_t *cred) {
     return 0;
 }
 
-// 解析IP:端口:用户名:密码或类似格式
+// 解析多种格式的 IP/PORT/USER/PASS
 int parse_ip_port_user_pass(const char *line, ip_port_t *addr, credential_t *cred) {
     if (!line || !addr || !cred) return -1;
-    
     memset(addr, 0, sizeof(ip_port_t));
     memset(cred, 0, sizeof(credential_t));
-    
-    // 格式: IP:PORT:USERNAME:PASSWORD 或类似
-    char *copy = strdup(line);
-    if (!copy) return -1;
-    
+    strcpy(cred->username, "-");
+    strcpy(cred->password, "-");
+
+    char buf[1024];
+    strncpy(buf, line, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = '\0';
+    char *s = str_trim(buf);
+
+    /* 尝试解析 user:pass@ip:port 格式 */
+    char *at = strchr(s, '@');
+    if (at) {
+        *at = '\0';
+        char *up = s;
+        char *ip_port_str = at + 1;
+        char *colon_up = strchr(up, ':');
+        if (colon_up) {
+            *colon_up = '\0';
+            strncpy(cred->username, up, sizeof(cred->username) - 1);
+            strncpy(cred->password, colon_up + 1, sizeof(cred->password) - 1);
+        } else {
+            strncpy(cred->password, up, sizeof(cred->password) - 1);
+            strcpy(cred->username, "admin");
+        }
+        
+        char *colon_ip = strchr(ip_port_str, ':');
+        if (colon_ip) {
+            *colon_ip = '\0';
+            ip_parse(ip_port_str, &addr->ip);
+            addr->port = (uint16_t)atoi(colon_ip + 1);
+        } else {
+            ip_parse(ip_port_str, &addr->ip);
+        }
+        return 0;
+    }
+
+    /* 尝试解析 ip:port:user:pass 或 ip:user:pass 或 ip:port (使用全局/给定的凭据) */
     char *parts[4] = {0};
-    int part_count = 0;
-    char *p = copy;
-    
-    for (int i = 0; i < 4 && p; i++) {
-        char *next = strchr(p, ':');
-        if (next) {
-            *next = '\0';
-            parts[i] = p;
-            p = next + 1;
-            part_count++;
+    int p_idx = 0;
+    char *p = s;
+    while (p_idx < 4 && p) {
+        char *colon = strchr(p, ':');
+        parts[p_idx++] = p;
+        if (colon) {
+            *colon = '\0';
+            p = colon + 1;
         } else {
-            parts[i] = p;
             p = NULL;
-            part_count++;
         }
     }
+
+    if (p_idx >= 1) ip_parse(parts[0], &addr->ip);
     
-    // 解析IP和端口
-    if (parts[0]) {
-        char *port_sep = strchr(parts[0], ':');
-        if (port_sep) {
-            *port_sep = '\0';
-            ip_parse(parts[0], &addr->ip);
-            addr->port = (uint16_t)atoi(port_sep + 1);
+    if (p_idx == 2) {
+        /* ip:port 或者 ip:pass (罕见) */
+        int val = atoi(parts[1]);
+        if (val > 0 && val <= 65535) addr->port = (uint16_t)val;
+        else strncpy(cred->password, parts[1], sizeof(cred->password) - 1);
+    } else if (p_idx == 3) {
+        /* ip:port:pass 或 ip:user:pass */
+        int val = atoi(parts[1]);
+        if (val > 0 && val <= 65535) {
+            addr->port = (uint16_t)val;
+            strncpy(cred->password, parts[2], sizeof(cred->password) - 1);
+            strcpy(cred->username, "admin");
         } else {
-            ip_parse(parts[0], &addr->ip);
-            if (parts[1]) {
-                addr->port = (uint16_t)atoi(parts[1]);
-            }
+            strncpy(cred->username, parts[1], sizeof(cred->username) - 1);
+            strncpy(cred->password, parts[2], sizeof(cred->password) - 1);
         }
+    } else if (p_idx >= 4) {
+        /* ip:port:user:pass */
+        addr->port = (uint16_t)atoi(parts[1]);
+        strncpy(cred->username, parts[2], sizeof(cred->username) - 1);
+        strncpy(cred->password, parts[3], sizeof(cred->password) - 1);
     }
-    
-    // 解析用户名和密码
-    int user_idx = 2;
-    int pass_idx = 3;
-    
-    // 如果端口在第二部分
-    if (parts[1] && strchr(parts[1], ':') == NULL && atoi(parts[1]) > 0) {
-        user_idx = 2;
-        pass_idx = 3;
-    }
-    
-    if (user_idx < part_count && parts[user_idx]) {
-        strncpy(cred->username, parts[user_idx], sizeof(cred->username) - 1);
-    } else {
-        strcpy(cred->username, "admin");
-    }
-    
-    if (pass_idx < part_count && parts[pass_idx]) {
-        strncpy(cred->password, parts[pass_idx], sizeof(cred->password) - 1);
-    }
-    
-    free(copy);
+
     return 0;
 }
 
@@ -244,14 +259,15 @@ int extract_rtt_ms(const char *line) {
  * expand_ip_range: 将一行文本中的 IP 描述展开为独立 IP 字符串数组。
  * 支持格式:
  *   单 IP      1.2.3.4
- *   IP:PORT    1.2.3.4:8080   (仅提取 IP)
- *   CIDR       1.2.3.0/24
+ *   IP:PORT    1.2.3.4:8080   (后缀 :8080 会补充给展开项)
+ *   CIDR       1.2.3.0/24   -> 1.2.3.1 ~ 1.2.3.254
+ *   CIDR带端口 1.2.3.0/24:8080 -> 1.2.3.1:8080 ~ 1.2.3.254:8080
  *   范围(全)   1.2.3.1-1.2.3.254
  *   范围(末端) 1.2.3.1-254
  *
  * 参数: line   输入字符串
  *       out    *out 指向 malloc 分配的 char* 数组
- *       count  展开后的 IP 数量
+ *       count  展开后的项数
  * 返回: 0=成功 -1=失败/无效
  * 调用方要 free(*out)[i] 和 free(*out) 本身
  */
@@ -259,56 +275,65 @@ int expand_ip_range(const char *line, char ***out, size_t *count) {
     if (!line || !out || !count) return -1;
     *out = NULL; *count = 0;
 
-    /* 去掉前导/尾部空白 */
-    char buf[256];
+    char buf[1024];
     strncpy(buf, line, sizeof(buf) - 1);
     buf[sizeof(buf) - 1] = '\0';
-    /* trim */
+    
     char *s = buf;
     while (*s && isspace((unsigned char)*s)) s++;
     char *e = s + strlen(s) - 1;
     while (e > s && isspace((unsigned char)*e)) *e-- = '\0';
     if (!*s || *s == '#') return -1;
 
-    /* 去掉 IP:PORT 末尾端口（保留 IP 部分） */
-    char ip_part[128];
+    /* 寻找主 IP 段与后缀（比如 /24:8080 的 :8080） */
+    char ip_part[256];
+    char suffix[256] = "";
+    
+    /* 找出第一个不在 CIDR 或范围表示内的冒号，作为可能后缀起点 */
+    char *colon = NULL;
+    /* 特别处理 /24:80 这种格式 */
+    char *slash = strchr(s, '/');
+    if (slash) {
+        colon = strchr(slash, ':');
+    } else {
+        char *dash = strchr(s, '-');
+        if (dash) colon = strchr(dash, ':');
+        else colon = strchr(s, ':');
+    }
+
+    if (colon) {
+        strncpy(suffix, colon, sizeof(suffix) - 1);
+        *colon = '\0';
+    }
     strncpy(ip_part, s, sizeof(ip_part) - 1);
     ip_part[sizeof(ip_part) - 1] = '\0';
 
-    /* 检测是否有冒号（IPv4 含端口） — 只处理 IPv4 */
-    char *colon = strchr(ip_part, ':');
-    if (colon) *colon = '\0';  /* 截掉端口 */
+    uint32_t start_ip = 0, end_ip = 0;
 
-    /* 工具：将 "a.b.c.d" 转为 32 位网络序整数 */
 #define IP_TO_U32(str, val) do { \
     struct in_addr _a; \
     if (inet_pton(AF_INET, (str), &_a) != 1) return -1; \
     (val) = ntohl(_a.s_addr); \
 } while(0)
 
-    uint32_t start_ip = 0, end_ip = 0;
-
-    /* 情况 1: CIDR  a.b.c.d/prefix */
-    char *slash = strchr(ip_part, '/');
+    slash = strchr(ip_part, '/');
     if (slash) {
         *slash = '\0';
         int prefix = atoi(slash + 1);
         if (prefix < 0 || prefix > 32) return -1;
         IP_TO_U32(ip_part, start_ip);
         uint32_t mask = prefix == 0 ? 0 : (~0u << (32 - prefix));
-        start_ip = (start_ip & mask) + 1;          /* 跳过网络地址 */
-        end_ip   = (start_ip - 1) | (~mask & 0xFFFFFFFE); /* 跳过广播地址 */
+        start_ip = (start_ip & mask) + 1;
+        end_ip   = (start_ip - 1) | (~mask & 0xFFFFFFFE);
         if (prefix >= 31) { start_ip = (start_ip & mask); end_ip = start_ip; }
         goto expand;
     }
 
-    /* 情况 2: 范围  a.b.c.x-a.b.c.y  或  a.b.c.x-y */
     char *dash = strchr(ip_part, '-');
     if (dash) {
         *dash = '\0';
         const char *rhs = dash + 1;
         IP_TO_U32(ip_part, start_ip);
-        /* 判断右侧是完整 IP 还是末尾八位 */
         if (strchr(rhs, '.')) {
             IP_TO_U32(rhs, end_ip);
         } else {
@@ -320,13 +345,16 @@ int expand_ip_range(const char *line, char ***out, size_t *count) {
         goto expand;
     }
 
-    /* 情况 3: 单 IP */
-    IP_TO_U32(ip_part, start_ip);
+    /* 单 IP */
+    if (inet_pton(AF_INET, ip_part, &start_ip) != 1) {
+        /* 如果 inet_pton 失败，它可能根本不是 IP (例如 username:password)，这直接返回-1就行 */
+        return -1;
+    }
+    start_ip = ntohl(start_ip);
     end_ip = start_ip;
 
 expand:;
     size_t n = (size_t)(end_ip - start_ip + 1);
-    /* 安全上限：单次展开不超过 65536 个 IP（/16 以下用 CIDR 合并） */
     if (n == 0 || n > 65536) return -1;
 
     char **arr = (char **)malloc(n * sizeof(char *));
@@ -336,8 +364,11 @@ expand:;
         uint32_t ip = start_ip + (uint32_t)i;
         struct in_addr a;
         a.s_addr = htonl(ip);
-        char tmp[INET_ADDRSTRLEN];
-        inet_ntop(AF_INET, &a, tmp, sizeof(tmp));
+        char tmp[INET_ADDRSTRLEN + 256]; /* 加上 suffix 的余量 */
+        char ip_str[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &a, ip_str, sizeof(ip_str));
+        
+        snprintf(tmp, sizeof(tmp), "%s%s", ip_str, suffix);
         arr[i] = strdup(tmp);
         if (!arr[i]) {
             for (size_t j = 0; j < i; j++) free(arr[j]);
