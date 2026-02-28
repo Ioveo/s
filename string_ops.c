@@ -293,6 +293,19 @@ int expand_ip_range(const char *line, char ***out, size_t *count) {
     char suffix[256] = "";
     strncpy(ip_part, s, sizeof(ip_part) - 1);
     
+    // 寻找前缀 (例如 user:pass@)
+    char prefix[256] = "";
+    char *at = strchr(ip_part, '@');
+    if (at) {
+        size_t pref_len = at - ip_part + 1; // 包含 '@'
+        if (pref_len < sizeof(prefix)) {
+            strncpy(prefix, ip_part, pref_len);
+            prefix[pref_len] = '\0';
+        }
+        // 将 ip_part 掐头
+        memmove(ip_part, at + 1, strlen(at + 1) + 1);
+    }
+
     // 定位可能是 port 相关的尾部冒号
     char *colon = NULL;
     char *slash = strchr(ip_part, '/');
@@ -303,8 +316,7 @@ int expand_ip_range(const char *line, char ***out, size_t *count) {
     } else if (dash) {
         colon = strchr(dash, ':');
     } else {
-        // 对于没有任何范围符号的单IP，比如 1.1.1.1:80，直接找首个或最后一个冒号
-        // 为了防备 user:pass@1.1.1.1:80 这种结构（实际上该结构不由本函数管，但以防万一），保守找末尾冒号。
+        // 对于没有任何范围符号的单IP，比如 1.1.1.1:80，直接找最后一个冒号
         colon = strrchr(ip_part, ':');
     }
 
@@ -324,13 +336,13 @@ int expand_ip_range(const char *line, char ***out, size_t *count) {
     slash = strchr(ip_part, '/');
     if (slash) {
         *slash = '\0';
-        int prefix = atoi(slash + 1);
-        if (prefix < 0 || prefix > 32) return -1;
+        int pfx = atoi(slash + 1);
+        if (pfx < 0 || pfx > 32) return -1;
         IP_TO_U32(ip_part, start_ip);
-        uint32_t mask = prefix == 0 ? 0 : (~0u << (32 - prefix));
+        uint32_t mask = pfx == 0 ? 0 : (~0u << (32 - pfx));
         start_ip = (start_ip & mask) + 1;
         end_ip   = (start_ip - 1) | (~mask & 0xFFFFFFFE);
-        if (prefix >= 31) { start_ip = (start_ip & mask); end_ip = start_ip; }
+        if (pfx >= 31) { start_ip = (start_ip & mask); end_ip = start_ip; }
         goto expand;
     }
 
@@ -369,11 +381,11 @@ expand:;
         uint32_t ip = start_ip + (uint32_t)i;
         struct in_addr a;
         a.s_addr = htonl(ip);
-        char tmp[INET_ADDRSTRLEN + 256]; /* 加上 suffix 的余量 */
+        char tmp[INET_ADDRSTRLEN + 512]; /* 加上 suffix 和 prefix 的余量 */
         char ip_str[INET_ADDRSTRLEN];
         inet_ntop(AF_INET, &a, ip_str, sizeof(ip_str));
         
-        snprintf(tmp, sizeof(tmp), "%s%s", ip_str, suffix);
+        snprintf(tmp, sizeof(tmp), "%s%s%s", prefix, ip_str, suffix);
         arr[i] = strdup(tmp);
         if (!arr[i]) {
             for (size_t j = 0; j < i; j++) free(arr[j]);
