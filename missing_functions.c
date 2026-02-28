@@ -166,8 +166,10 @@ int saia_interactive_mode(void) {
                 break;
 
             case 3:
-                saia_report_menu();
+                saia_realtime_monitor();
                 break;
+
+            /* case 10: 报表查看 (临时用子菜单内维持) */
 
             case 4:
                 printf("功能开发中...\n");
@@ -334,6 +336,164 @@ int saia_credentials_menu(void) {
         default:
             break;
     }
+    return 0;
+}
+
+// ==================== 大屏面板工具函数 (对应 DEJI.py 极光UI) ====================
+
+/* 计算包含 ANSI 转义的字符串实际显示宽度（中文算 2） */
+static int visible_width(const char *s) {
+    int w = 0;
+    int in_esc = 0;
+    while (s && *s) {
+        if (in_esc) {
+            if (*s == 'm') in_esc = 0;
+            s++;
+            continue;
+        }
+        if (*s == '\033') { in_esc = 1; s++; continue; }
+        unsigned char c = (unsigned char)*s;
+        if (c < 0x80) { w += 1; s++; }
+        else if ((c & 0xE0) == 0xC0) {
+            /* UTF-8 2 byte */
+            unsigned int cp = (c & 0x1F) << 6;
+            if (*(s+1)) cp |= (*(s+1) & 0x3F);
+            w += (cp >= 0xFF01 && cp <= 0xFF60) ? 2 : 1;
+            s += 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            /* UTF-8 3 byte (CJK 在此范围) */
+            w += 2;
+            s += 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            /* UTF-8 4 byte (emoji 等) */
+            w += 2;
+            s += 4;
+        } else { w += 1; s++; }
+    }
+    return w;
+}
+
+/* 渲染渐变进度条，返回静态内部缓冲区（调用不需游离）*/
+static const char *render_progress_bar(int done, int total, int width) {
+    static char buf[256];
+    if (total <= 0) {
+        snprintf(buf, sizeof(buf), "%s[%s%.*s%s] --.-%%%s",
+                 C_BLUE, C_DIM,
+                 width, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━",
+                 C_RESET, C_RESET);
+        return buf;
+    }
+    double ratio = (double)done / total;
+    if (ratio < 0.0) ratio = 0.0;
+    if (ratio > 1.0) ratio = 1.0;
+    int fill = (int)(width * ratio);
+    char bar[160] = {0};
+    int pos = 0;
+    /* 绿色已填充 */
+    pos += snprintf(bar + pos, sizeof(bar) - pos, "%s", C_GREEN);
+    for (int i = 0; i < fill && pos < (int)sizeof(bar) - 10; i++)
+        pos += snprintf(bar + pos, sizeof(bar) - pos, "━");
+    /* 暗色未填充 */
+    pos += snprintf(bar + pos, sizeof(bar) - pos, "%s", C_DIM);
+    for (int i = fill; i < width && pos < (int)sizeof(bar) - 10; i++)
+        pos += snprintf(bar + pos, sizeof(bar) - pos, "━");
+    pos += snprintf(bar + pos, sizeof(bar) - pos, "%s", C_RESET);
+    snprintf(buf, sizeof(buf), "%s[%s%s] %5.1f%%%s",
+             C_BLUE, bar, C_BLUE,
+             ratio * 100.0, C_RESET);
+    return buf;
+}
+
+/* 单行带边框输出，自动补齐 */
+static void render_panel_line(const char *text, int inner) {
+    int w = visible_width(text);
+    int pad = inner - 1 - w;
+    if (pad < 0) pad = 0;
+    printf("%s┃ %s%*s%s┃%s\n", C_BLUE, text, pad, "", C_BLUE, C_RESET);
+}
+
+/* 单板构建 */
+static void render_single_panel(const char *title, const char **lines, int nlines, int inner, int rows) {
+    /* 上边框 */
+    printf("%s┏", C_BLUE);
+    for (int i = 0; i < inner; i++) printf("━");
+    printf("┓%s\n", C_RESET);
+    /* 标题 */
+    render_panel_line(title, inner);
+    /* 分隔 */
+    printf("%s┣", C_BLUE);
+    for (int i = 0; i < inner; i++) printf("━");
+    printf("┫%s\n", C_RESET);
+    /* 内容行 */
+    int shown = 0;
+    for (int i = 0; i < nlines && shown < rows; i++, shown++)
+        render_panel_line(lines[i], inner);
+    while (shown < rows) {
+        render_panel_line("", inner);
+        shown++;
+    }
+    /* 下边框 */
+    printf("%s┗", C_BLUE);
+    for (int i = 0; i < inner; i++) printf("━");
+    printf("┛%s\n", C_RESET);
+}
+
+/* 实时监控: 读取 sys_audit_state.json 并显示双栏大屏 */
+int saia_realtime_monitor(void) {
+    printf("%s\u5f53前功能开发中，临时显示状态文件内容\u2026%s\n", C_YELLOW, C_RESET);
+
+    /* 读取 JSON 状态文件 */
+    size_t fsz = 0;
+    char *raw = file_read_all(g_config.state_file, &fsz);
+    if (!raw) {
+        printf("%s审计进程未运行（%s 不存在）%s\n",
+               C_DIM, g_config.state_file, C_RESET);
+        return 0;
+    }
+
+    /* 简单显示状态文件内容 */
+    const char *left_title = C_CYAN "SAIA MONITOR | " C_WHITE "实时状态";
+    const char *lines[16];
+    char line_buf[16][128];
+    int nl = 0;
+
+    /* 提取几个关键字段并显示 */
+    const char *fields[] = {"status", "mode", "done", "total",
+                             "xui_found", "xui_verified", "s5_found", "s5_verified",
+                             "pid", "threads", "current", NULL};
+    for (int i = 0; fields[i] && nl < 11; i++) {
+        /* 简单 JSON string-search，足够应对状态文件 */
+        char pat[64];
+        snprintf(pat, sizeof(pat), "\"%s\"", fields[i]);
+        char *p = strstr(raw, pat);
+        if (!p) continue;
+        p += strlen(pat);
+        while (*p == ' ' || *p == ':') p++;
+        /* 取值 */
+        char val[96] = "-";
+        if (*p == '"') {
+            p++;
+            int vi = 0;
+            while (*p && *p != '"' && vi < 90) val[vi++] = *p++;
+            val[vi] = 0;
+        } else {
+            int vi = 0;
+            while (*p && *p != ',' && *p != '}' && *p != '\n' && vi < 90)
+                val[vi++] = *p++;
+            val[vi] = 0;
+        }
+        snprintf(line_buf[nl], sizeof(line_buf[nl]),
+                 "%s%-12s%s: %s%s%s",
+                 C_WHITE, fields[i], C_RESET, C_CYAN, val, C_RESET);
+        lines[nl] = line_buf[nl];
+        nl++;
+    }
+    free(raw);
+
+    render_single_panel(left_title, lines, nl, 72, 12);
+    printf("\n%s尚未支持自动刷新。%s按 Enter 返回主菜单…", C_DIM, C_RESET);
+    fflush(stdout);
+    while (getchar() != '\n');
     return 0;
 }
 

@@ -117,27 +117,19 @@ void saia_cleanup(void) {
 // ==================== 打印横幅 ====================
 
 void saia_print_banner(void) {
-
-    color_blue();
-
-    color_bold();
-
     printf("\n");
-
-    printf("╔════════════════════════════════════════╗\n");
-
-    printf("║  " SAIA_NAME " v" SAIA_VERSION "     ║\n");
-
-    printf("║              纯C实现版本                 ║\n");
-
-    printf("║          自包含 - 无第三方依赖         ║\n");
-
-    printf("╚════════════════════════════════════════╝\n");
-
-    color_reset();
-
-    printf("\n");
-
+    printf("%s%s", C_BLUE, C_BOLD);
+    printf("┏%s┓\n",
+           "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    printf("┃  %s%-42s%s  %s┃\n",
+           C_CYAN, "SYSTEM ASSET INTEGRITY AUDITOR (SAIA) v" SAIA_VERSION, C_BLUE, C_BLUE);
+    printf("┃  %s%-42s%s  %s┃\n",
+           C_WHITE, "极光UI显密版  |  FreeBSD原生 C语言实现", C_BLUE, C_BLUE);
+    printf("┃  %s%-42s%s  %s┃\n",
+           C_DIM, "XUI / SOCKS5 / Deep-Audit  |  Multi-thread", C_BLUE, C_BLUE);
+    printf("┗%s┛\n",
+           "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    printf(C_RESET "\n");
 }
 
 // ==================== 打印统计信息 ====================
@@ -199,56 +191,83 @@ void saia_print_stats(state_t *state) {
 // ==================== 交互式菜单 ====================
 
 int saia_print_menu(void) {
+    /* 清屏
+    printf("\x1b[H\x1b[J"); */
 
-    color_cyan();
+    /* 实时读取审计状态 */
+    const char *bdr = C_BLUE;
+    const int inner = 74;
 
-    color_bold();
+    /* 上边框 */
+    printf("%s┏", bdr);
+    for (int i = 0; i < inner; i++) printf("━");
+    printf("┓" C_RESET "\n");
 
-    printf("═ 功能菜单 ═\n");
+    /* 标题行 */
+    printf("%s┃ %s%s%-*s%s %s┃" C_RESET "\n",
+           bdr, C_CYAN, C_BOLD,
+           inner - 2, "SAIA MASTER CONSOLE v" SAIA_VERSION " | 极光控制台",
+           C_RESET, bdr);
 
-    color_reset();
+    /* 分隔行 */
+    printf("%s┣", bdr);
+    for (int i = 0; i < inner; i++) printf("━");
+    printf("┫" C_RESET "\n");
 
-    color_white();
+    /* 运行区标题 */
+    printf("%s┃ %s「运行」%-*s%s┃" C_RESET "\n",
+           bdr, C_CYAN, inner - 7, "", bdr);
 
-    printf("  [1] 开始审计扫描\n");
+    /* 运行区两列菜单 */
+    printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
+           bdr,
+           C_HOT,  " 1. 开始审计扫描",
+           C_WHITE, " 2. 配置参数",
+           C_WHITE, " 3. 实时监控",
+           bdr);
+    printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
+           bdr,
+           C_WHITE, " 4. 待指定: XUI面板查看",
+           C_WHITE, " 5. 待指定: S5面板查看",
+           C_WHITE, " 6. 小鸡资源展示",
+           bdr);
 
-    printf("  [2] 配置参数\n");
+    /* 分隔行 */
+    printf("%s┣", bdr);
+    for (int i = 0; i < inner; i++) printf("━");
+    printf("┫" C_RESET "\n");
 
-    printf("  [3] 查看报表\n");
+    /* 数据/配置区 */
+    printf("%s┃ %s「配置与数据」%-*s%s┃" C_RESET "\n",
+           bdr, C_CYAN, inner - 13, "", bdr);
+    printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
+           bdr,
+           C_WHITE, " 5. 节点管理",
+           C_WHITE, " 6. 凭据管理",
+           C_WHITE, " 7. Telegram推送",
+           bdr);
+    printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
+           bdr,
+           C_WHITE, " 8. 压背控制",
+           C_WHITE, " 3. 查看报表",
+           C_WHITE, " 9. 清理数据",
+           bdr);
 
-    printf("  [4] 导出结果\n");
+    /* 下边框 */
+    printf("%s┗", bdr);
+    for (int i = 0; i < inner; i++) printf("━");
+    printf("┛" C_RESET "\n");
 
-    printf("  [5] 节点管理\n");
-
-    printf("  [6] 凭据管理\n");
-
-    printf("  [7] Telegram推送\n");
-
-    printf("  [8] 压背控制\n");  // 新增\n
-    printf("  [9] 清理数据\n");
-
-    printf("  [0] 退出\n");
-
-    color_reset();
-
-    printf("\n请选择: ");
-
+    printf("%s[ 0 ]退出程序%s   请输入选项: ", C_DIM, C_RESET);
     fflush(stdout);
 
     int choice;
-
     if (scanf("%d", &choice) != 1) {
-
-        while (getchar() != '\n');  // 清除输入缓冲区
-
+        while (getchar() != '\n');
         return -1;
-
     }
-
-    while (getchar() != '\n');  // 清除换行符
-
+    while (getchar() != '\n');
     return choice;
-
 }
 
 // ==================== 开始审计 ====================

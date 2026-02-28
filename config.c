@@ -63,6 +63,11 @@ int config_init(config_t *cfg, const char *base_dir) {
     cfg->backpressure.current_cpu = 0.0f;
     cfg->backpressure.current_mem = 0.0f;
 
+    // 默认端口配置 (对应 DEJI.py DEFAULT_XUI_PORTS / DEFAULT_S5_PORTS)
+    strncpy(cfg->xui_ports, DEFAULT_XUI_PORTS, sizeof(cfg->xui_ports) - 1);
+    strncpy(cfg->s5_ports, DEFAULT_S5_PORTS, sizeof(cfg->s5_ports) - 1);
+    strncpy(cfg->fofa_ports, DEFAULT_FOFA_TOP100_PORTS, sizeof(cfg->fofa_ports) - 1);
+
     // 尝试加载配置文件
     config_load(cfg, cfg->state_file);
 

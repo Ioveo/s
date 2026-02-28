@@ -75,6 +75,50 @@
 #define MAX_CONCURRENT_CONNECTIONS 500
 #define BACKPRESSURE_CHECK_INTERVAL 1
 
+// ==================== 默认端口配置 ====================
+// 对应 DEJI.py 原版端口默认值
+
+#define DEFAULT_XUI_PORTS \
+    "54321,2053,7777,5000"
+
+#define DEFAULT_S5_PORTS \
+    "1080-1090,1111,2222,3333,4444,5555,6666,7777,8888,9999," \
+    "1234,4321,8000,9000,6868,6688,8866,9527,1472,2583,3694,10000-10010"
+
+#define DEFAULT_S5_PORTS_HIGH \
+    "1080-1085,10808-10810,2012,2080,4145,3128,10080,8080,8888,9999," \
+    "1111,2222,3333,4444,5555,6666,7777,20000-20010,30000-30010,40000-40010," \
+    "51234,65535,43892,11111,22222,33333"
+
+#define DEFAULT_MIXED_PORTS \
+    DEFAULT_XUI_PORTS "," DEFAULT_S5_PORTS
+
+#define DEFAULT_FOFA_TOP100_PORTS \
+    "80,81,82,83,88,89,90,95,96,98,99,100,101,102," \
+    "1080,1081,1082,1083,1084,1085,1086,1087,1088,1089,1090," \
+    "1100,1111,1180,1200,1234,1314,1433,1521,1680,1880,1900," \
+    "2000,2001,2002,2080,2082,2083,2086,2087,2095," \
+    "3000,3001,3002,3128,3333," \
+    "4000,4001,4002,4145,4321,4444," \
+    "5000,5001,5432,5555,5601,5678,5683," \
+    "6000,6001,6080,6379,6443,6666," \
+    "7000,7001,7002,7003,7080,7443,7547,7777,7800," \
+    "8000,8001,8008,8010,8080,8081,8082,8083,8086,8087,8088,8089,8090," \
+    "8181,8443,8800,8880,8888," \
+    "9000,9090,9443,10000"
+
+// ==================== 颜色/样式 (极光配色) ====================
+#define C_RESET   "\033[0m"
+#define C_BOLD    "\033[1m"
+#define C_DIM     "\033[2m"
+#define C_BLUE    "\033[38;5;39m"   /* 边框蓝 */
+#define C_CYAN    "\033[38;5;51m"   /* 标题青 */
+#define C_GREEN   "\033[38;5;46m"   /* 进度绿 */
+#define C_YELLOW  "\033[38;5;214m"  /* 警告橙 */
+#define C_RED     "\033[31m"
+#define C_WHITE   "\033[97m"        /* 菜单白字 */
+#define C_HOT     "\033[38;5;210m"  /* 菜单激活 (浅红) */
+
 // ==================== 数据结构 ====================
 
 // 字符串缓冲区
@@ -193,6 +237,10 @@ typedef struct {
     bool skip_scanned;
     uint8_t expose_secret;
     bool verbose;
+    /* 端口配置 (对应 DEJI.py DEFAULT_XUI_PORTS / DEFAULT_S5_PORTS) */
+    char xui_ports[4096];
+    char s5_ports[4096];
+    char fofa_ports[4096];
 } config_t;
 
 // 状态结构
@@ -271,6 +319,7 @@ int saia_config_menu(void);
 int saia_report_menu(void);
 int saia_nodes_menu(void);
 int saia_interactive_mode(void);
+int saia_realtime_monitor(void);
 int saia_write_list_file_from_input(const char *file_path, int split_spaces, int append_mode);
 // missing_functions.c
 int saia_backpressure_menu(void);
