@@ -477,22 +477,15 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
                              uint16_t *ports, size_t port_count) {
     init_locks();
 
-    /* 第一遍: 估算总目标数 (用于进度显示) */
+    /* 快速估算总目标数 — 不做真正展开，只算数目 */
     size_t est_total = 0;
     for (size_t i = 0; i < raw_count; i++) {
         if (!raw_lines[i] || !*raw_lines[i] || *raw_lines[i] == '#') continue;
-        char **sub = NULL; size_t sub_n = 0;
-        if (expand_ip_range(raw_lines[i], &sub, &sub_n) == 0 && sub) {
-            est_total += sub_n;
-            for (size_t j = 0; j < sub_n; j++) free(sub[j]);
-            free(sub);
-        } else {
-            est_total += 1; /* 无法展开的原样行算一个 */
-        }
+        est_total += estimate_expanded_count(raw_lines[i]);
     }
     printf("开始扫描... 预估目标: %zu, 总端口: %zu\n", est_total, port_count);
 
-    size_t fed_count = 0; /* 已投喂计数 */
+    size_t fed_count = 0;
 
     for (size_t li = 0; li < raw_count && g_running; li++) {
         const char *line = raw_lines[li];
@@ -502,7 +495,6 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
         char **expanded = NULL;
         size_t exp_n = 0;
         if (expand_ip_range(line, &expanded, &exp_n) != 0 || !expanded || exp_n == 0) {
-            /* 展开失败，当作原样单目标 */
             expanded = (char **)malloc(sizeof(char *));
             expanded[0] = strdup(line);
             exp_n = 1;
@@ -512,25 +504,25 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
         for (size_t ei = 0; ei < exp_n && g_running; ei++) {
             const char *ip = expanded[ei];
 
-            /* 等待线程池有空位 */
-            while (g_running) {
-                if (g_config.backpressure.enabled) {
-                    backpressure_update(&g_config.backpressure);
-                    if (backpressure_should_throttle(&g_config.backpressure)) {
-                        saia_sleep(1000);
-                        continue;
+            /* 对当前 IP 的每个端口创建线程 — 每个端口前都检查容量 */
+            for (size_t p = 0; p < port_count && g_running; p++) {
+                /* 等待线程池有空位 */
+                while (g_running) {
+                    if (g_config.backpressure.enabled) {
+                        backpressure_update(&g_config.backpressure);
+                        if (backpressure_should_throttle(&g_config.backpressure)) {
+                            saia_sleep(200);
+                            continue;
+                        }
                     }
+                    MUTEX_LOCK(lock_stats);
+                    int cur = running_threads;
+                    MUTEX_UNLOCK(lock_stats);
+                    if (cur < g_config.threads) break;
+                    saia_sleep(5); /* 快速轮询 */
                 }
-                MUTEX_LOCK(lock_stats);
-                int cur = running_threads;
-                MUTEX_UNLOCK(lock_stats);
-                if (cur < g_config.threads) break;
-                saia_sleep(50);
-            }
-            if (!g_running) break;
+                if (!g_running) break;
 
-            /* 对当前 IP 的每个端口创建线程 */
-            for (size_t p = 0; p < port_count; p++) {
                 worker_arg_t *arg = (worker_arg_t *)malloc(sizeof(worker_arg_t));
                 strncpy(arg->ip, ip, sizeof(arg->ip) - 1);
                 arg->ip[sizeof(arg->ip) - 1] = '\0';
@@ -553,8 +545,7 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
             }
 
             fed_count++;
-            /* 进度显示 */
-            if (fed_count % 100 == 0 || fed_count == est_total) {
+            if (fed_count % 500 == 0 || fed_count == est_total) {
                 MUTEX_LOCK(lock_stats);
                 int rt = running_threads;
                 uint64_t scanned = g_state.total_scanned;
@@ -569,7 +560,7 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
             }
         }
 
-        /* 释放本行的展开结果 */
+        /* 释放本行展开结果 */
         for (size_t j = 0; j < exp_n; j++) free(expanded[j]);
         free(expanded);
     }
@@ -580,7 +571,7 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
         int remaining = running_threads;
         MUTEX_UNLOCK(lock_stats);
         if (remaining <= 0) break;
-        saia_sleep(500);
+        saia_sleep(200);
     }
 
     printf("\n扫描结束\n");

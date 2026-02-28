@@ -233,7 +233,7 @@ int saia_print_menu(void) {
            bdr,
            C_WHITE, " 7. 启动守护进程",
            C_WHITE, " 8. 停止守护进程",
-           C_WHITE, "  ",
+           C_WHITE, " 9. 守护诊断",
            bdr);
 
     /* 分隔行 */

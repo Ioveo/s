@@ -157,57 +157,274 @@ int saia_interactive_mode(void) {
         int choice = saia_print_menu();
 
         switch (choice) {
-            case 1:
-                saia_run_audit_internal(0, 0, 0);
-                break;
-
-            case 2:
-                saia_config_menu();
-                break;
-
-            case 3:
-                saia_realtime_monitor();
-                break;
-
-            /* case 10: 报表查看 (临时用子菜单内维持) */
-
-            case 4:
-                printf("功能开发中...\n");
-                break;
-
-            case 5:
-                saia_nodes_menu();
-                break;
-
-            case 6:
-                saia_credentials_menu();
-                break;
-
-            case 7:
-                saia_telegram_menu();
-                break;
-
-            case 8:
-                saia_backpressure_menu();
-                break;
-
-            case 9:
-                saia_cleanup_menu();
-                break;
-
+            /* ========== 运行 ========== */
             case 0:
                 g_running = 0;
                 printf("退出程序\n");
                 break;
+            case 1:
+                printf("%s提示: 扫描中按 Ctrl+C 可中断并返回主菜单%s\n", C_DIM, C_RESET);
+                saia_run_audit_internal(0, 0, 0);
+                /* 扫描结束或被 Ctrl+C 中断后，恢复 g_running 以便返回主菜单 */
+                g_running = 1;
+                saia_flush_stdin();
+                break;
+            case 2:
+                color_yellow();
+                printf("\n>>> [2] 手动停止审计 (未实现/TODO)\n");
+                color_reset();
+                break;
+            case 3:
+                saia_realtime_monitor();
+                break;
+            case 4: {
+                /* XUI 面板查看 — 显示 audit_report.log 中 XUI 结果 */
+                color_cyan();
+                printf("\n>>> [4] XUI 面板查看\n");
+                color_reset();
+                char report_path[MAX_PATH_LENGTH];
+                snprintf(report_path, sizeof(report_path), "%s/audit_report.log", g_config.base_dir);
+                char **lines = NULL; size_t lc = 0;
+                if (file_read_lines(report_path, &lines, &lc) == 0 && lc > 0) {
+                    int found = 0;
+                    for (size_t i = 0; i < lc; i++) {
+                        if (lines[i] && strstr(lines[i], "XUI")) {
+                            printf("  %s\n", lines[i]);
+                            found++;
+                        }
+                        free(lines[i]);
+                    }
+                    free(lines);
+                    if (!found) printf("  暂无 XUI 审计记录\n");
+                } else {
+                    printf("  暂无审计报告\n");
+                }
+                break;
+            }
+            case 5: {
+                /* S5 面板查看 */
+                color_cyan();
+                printf("\n>>> [5] S5 面板查看\n");
+                color_reset();
+                char report_path[MAX_PATH_LENGTH];
+                snprintf(report_path, sizeof(report_path), "%s/audit_report.log", g_config.base_dir);
+                char **lines = NULL; size_t lc = 0;
+                if (file_read_lines(report_path, &lines, &lc) == 0 && lc > 0) {
+                    int found = 0;
+                    for (size_t i = 0; i < lc; i++) {
+                        if (lines[i] && strstr(lines[i], "S5")) {
+                            printf("  %s\n", lines[i]);
+                            found++;
+                        }
+                        free(lines[i]);
+                    }
+                    free(lines);
+                    if (!found) printf("  暂无 S5 审计记录\n");
+                } else {
+                    printf("  暂无审计报告\n");
+                }
+                break;
+            }
+            case 6:
+                /* 小鸡资源展示 — VPS 资源监控 */
+                color_cyan();
+                printf("\n>>> [6] 小鸡资源展示\n");
+                color_reset();
+                saia_print_stats(&g_state);
+                break;
+
+            /* ========== 守护 ========== */
+            case 7:
+                color_yellow();
+                printf("\n>>> [7] 启动守护进程 (未实现/TODO)\n");
+                color_reset();
+                break;
+            case 8:
+                color_yellow();
+                printf("\n>>> [8] 停止守护进程 (未实现/TODO)\n");
+                color_reset();
+                break;
+            case 9:
+                color_yellow();
+                printf("\n>>> [9] 守护诊断 (未实现/TODO)\n");
+                color_reset();
+                break;
+
+            /* ========== 配置与通知 ========== */
+            case 10:
+                color_yellow();
+                printf("\n>>> [10] 断点续连 (未实现/TODO)\n");
+                color_reset();
+                break;
+            case 11:
+                color_yellow();
+                printf("\n>>> [11] 进料加速 (未实现/TODO)\n");
+                color_reset();
+                break;
+            case 12:
+                saia_telegram_menu();
+                break;
+
+            /* ========== 数据操作 ========== */
+            case 13: {
+                /* 更换 IP 列表 */
+                char nodes_path[MAX_PATH_LENGTH];
+                snprintf(nodes_path, sizeof(nodes_path), "%s/nodes.list", g_config.base_dir);
+                color_cyan();
+                printf("\n>>> [13] 更换IP列表\n");
+                color_reset();
+                printf("请逐行输入 IP/CIDR/范围 (输入 EOF 结束):\n");
+                int count = saia_write_list_file_from_input(nodes_path, 1, 0);
+                if (count >= 0) {
+                    color_green();
+                    printf(">>> IP 列表已更新，本次写入 %d 条\n\n", count);
+                    color_reset();
+                } else {
+                    color_red();
+                    printf(">>> 写入失败或已取消\n");
+                    color_reset();
+                }
+                break;
+            }
+            case 14: {
+                /* 更新 Tokens/口令 */
+                char tokens_path[MAX_PATH_LENGTH];
+                snprintf(tokens_path, sizeof(tokens_path), "%s/tokens.list", g_config.base_dir);
+                color_cyan();
+                printf("\n>>> [14] 更新口令 (tokens.list)\n");
+                color_reset();
+                printf("请逐行输入 user:pass (输入 EOF 结束):\n");
+                int count = saia_write_list_file_from_input(tokens_path, 0, 0);
+                if (count >= 0) {
+                    color_green();
+                    printf(">>> 口令已更新，本次写入 %d 条\n\n", count);
+                    color_reset();
+                } else {
+                    color_red();
+                    printf(">>> 写入失败或已取消\n");
+                    color_reset();
+                }
+                break;
+            }
+            case 15:
+                saia_report_menu();
+                break;
+            case 16:
+                saia_cleanup_menu();
+                break;
+            case 17: {
+                /* 无 L7 列表 — 显示怀疑无 L7 穿透的记录 */
+                color_cyan();
+                printf("\n>>> [17] 无 L7 列表\n");
+                color_reset();
+                char report_path[MAX_PATH_LENGTH];
+                snprintf(report_path, sizeof(report_path), "%s/audit_report.log", g_config.base_dir);
+                char **lines = NULL; size_t lc = 0;
+                if (file_read_lines(report_path, &lines, &lc) == 0 && lc > 0) {
+                    int found = 0;
+                    for (size_t i = 0; i < lc; i++) {
+                        if (lines[i] && strstr(lines[i], "NO_L7")) {
+                            printf("  %s\n", lines[i]);
+                            found++;
+                        }
+                        free(lines[i]);
+                    }
+                    free(lines);
+                    if (!found) printf("  暂无 No-L7 记录\n");
+                } else {
+                    printf("  暂无审计报告\n");
+                }
+                break;
+            }
+            case 18: {
+                /* 一键清理 */
+                color_yellow();
+                printf("\n>>> [18] 一键清理 — 清除运行日志和临时文件\n");
+                color_reset();
+                printf("确认清理? (y/N): ");
+                fflush(stdout);
+                char yn[8] = {0};
+                if (fgets(yn, sizeof(yn), stdin) && (yn[0] == 'y' || yn[0] == 'Y')) {
+                    char path[MAX_PATH_LENGTH];
+                    snprintf(path, sizeof(path), "%s/sys_audit_events.log", g_config.base_dir);
+                    file_remove(path);
+                    snprintf(path, sizeof(path), "%s/audit_report.log", g_config.base_dir);
+                    file_remove(path);
+                    snprintf(path, sizeof(path), "%s/sys_audit_state.json", g_config.base_dir);
+                    file_remove(path);
+                    color_green();
+                    printf(">>> 清理完成\n");
+                    color_reset();
+                } else {
+                    printf("已取消\n");
+                }
+                break;
+            }
+            case 19: {
+                /* 初始化 — 重置配置 */
+                color_yellow();
+                printf("\n>>> [19] 初始化 — 重置所有配置到默认值\n");
+                color_reset();
+                printf("确认初始化? 所有配置将被重置 (y/N): ");
+                fflush(stdout);
+                char yn[8] = {0};
+                if (fgets(yn, sizeof(yn), stdin) && (yn[0] == 'y' || yn[0] == 'Y')) {
+                    config_init(&g_config, g_config.base_dir);
+                    config_save(&g_config, g_config.state_file);
+                    color_green();
+                    printf(">>> 初始化完成\n");
+                    color_reset();
+                } else {
+                    printf("已取消\n");
+                }
+                break;
+            }
+            case 20: {
+                /* 项目备注 */
+                color_cyan();
+                printf("\n>>> [20] 项目备注\n");
+                color_reset();
+                char note_path[MAX_PATH_LENGTH];
+                snprintf(note_path, sizeof(note_path), "%s/project_note.json", g_config.base_dir);
+                char *existing = file_read_all(note_path);
+                if (existing && strlen(existing) > 0) {
+                    printf("当前备注: %s\n", existing);
+                }
+                if (existing) free(existing);
+                printf("输入新备注 (留空保持不变): ");
+                fflush(stdout);
+                char note[512] = {0};
+                if (fgets(note, sizeof(note), stdin)) {
+                    char *nl = strchr(note, '\n');
+                    if (nl) *nl = '\0';
+                    if (strlen(note) > 0) {
+                        FILE *fp = fopen(note_path, "w");
+                        if (fp) {
+                            fprintf(fp, "%s", note);
+                            fclose(fp);
+                            color_green();
+                            printf(">>> 备注已保存\n");
+                            color_reset();
+                        }
+                    }
+                }
+                break;
+            }
+            case 21:
+                color_yellow();
+                printf("\n>>> [21] IP 库管理 (未实现/TODO)\n");
+                color_reset();
+                break;
 
             default:
                 color_red();
-                printf("无效选择\n");
+                printf("\n无效选择: %d\n", choice);
                 color_reset();
         }
 
-        if (g_running) {
+        if (g_running && choice != 0) {
             printf("\n按Enter继续...");
+            fflush(stdout);
             getchar();
         }
     }
@@ -421,62 +638,114 @@ static void render_single_panel(const char *title, const char **lines, int nline
 
 /* 实时监控: 读取 sys_audit_state.json 并显示双栏大屏 */
 int saia_realtime_monitor(void) {
-    printf("%s\u5f53前功能开发中，临时显示状态文件内容\u2026%s\n", C_YELLOW, C_RESET);
+    while (g_running) {
+        /* 清屏 */
+        printf("\x1b[H\x1b[J");
 
-    /* 读取 JSON 状态文件 */
-    size_t fsz = 0;
-    char *raw = file_read_all_n(g_config.state_file, &fsz);
-    if (!raw) {
-        printf("%s审计进程未运行（%s 不存在）%s\n",
-               C_DIM, g_config.state_file, C_RESET);
-        return 0;
-    }
+        /* 计算运行时间 */
+        time_t now = time(NULL);
+        time_t elapsed = (g_state.start_time > 0) ? (now - g_state.start_time) : 0;
+        int hours = (int)(elapsed / 3600);
+        int mins  = (int)((elapsed % 3600) / 60);
+        int secs  = (int)(elapsed % 60);
 
-    /* 简单显示状态文件内容 */
-    const char *left_title = C_CYAN "SAIA MONITOR | " C_WHITE "实时状态";
-    const char *lines[16];
-    char line_buf[16][128];
-    int nl = 0;
+        const char *status_str = g_state.status[0] ? g_state.status : "idle";
+        const char *mode_str = g_config.mode == 1 ? "XUI专项" :
+                               g_config.mode == 2 ? "S5专项" :
+                               g_config.mode == 3 ? "深度全能" :
+                               g_config.mode == 4 ? "验真模式" : "未知";
+        const char *scan_str = g_config.scan_mode == 1 ? "探索" :
+                               g_config.scan_mode == 2 ? "探索+验真" :
+                               g_config.scan_mode == 3 ? "只留极品" : "未知";
 
-    /* 提取几个关键字段并显示 */
-    const char *fields[] = {"status", "mode", "done", "total",
-                             "xui_found", "xui_verified", "s5_found", "s5_verified",
-                             "pid", "threads", "current", NULL};
-    for (int i = 0; fields[i] && nl < 11; i++) {
-        /* 简单 JSON string-search，足够应对状态文件 */
-        char pat[64];
-        snprintf(pat, sizeof(pat), "\"%s\"", fields[i]);
-        char *p = strstr(raw, pat);
-        if (!p) continue;
-        p += strlen(pat);
-        while (*p == ' ' || *p == ':') p++;
-        /* 取值 */
-        char val[96] = "-";
-        if (*p == '"') {
-            p++;
-            int vi = 0;
-            while (*p && *p != '"' && vi < 90) val[vi++] = *p++;
-            val[vi] = 0;
-        } else {
-            int vi = 0;
-            while (*p && *p != ',' && *p != '}' && *p != '\n' && vi < 90)
-                val[vi++] = *p++;
-            val[vi] = 0;
+        /* 绘制面板 */
+        int inner = 74;
+        const char *bdr = C_BLUE;
+
+        printf("%s┏", bdr);
+        for (int i = 0; i < inner; i++) printf("━");
+        printf("┓" C_RESET "\n");
+
+        printf("%s┃ %s%sSAIA MONITOR v%s | 实时大屏%-*s%s %s┃" C_RESET "\n",
+               bdr, C_CYAN, C_BOLD, SAIA_VERSION, inner - 35, "", C_RESET, bdr);
+
+        printf("%s┣", bdr);
+        for (int i = 0; i < inner; i++) printf("━");
+        printf("┫" C_RESET "\n");
+
+        /* 状态行 */
+        char line1[256], line2[256], line3[256], line4[256];
+        snprintf(line1, sizeof(line1),
+                 " %s状态:%s %-10s %s|%s %s模式:%s %-8s %s|%s %s深度:%s %-10s %s|%s %s运行:%s %02d:%02d:%02d",
+                 C_WHITE, C_CYAN, status_str,
+                 bdr, C_RESET, C_WHITE, C_CYAN, mode_str,
+                 bdr, C_RESET, C_WHITE, C_CYAN, scan_str,
+                 bdr, C_RESET, C_WHITE, C_CYAN, hours, mins, secs);
+        printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line1, inner - 1, "", bdr);
+
+        snprintf(line2, sizeof(line2),
+                 " %s线程:%s %-6d %s|%s %sPID:%s %-8d %s|%s %sTelegram:%s %s",
+                 C_WHITE, C_CYAN, g_config.threads,
+                 bdr, C_RESET, C_WHITE, C_CYAN, (int)g_state.pid,
+                 bdr, C_RESET, C_WHITE, C_CYAN,
+                 g_config.telegram_enabled ? "ON" : "OFF");
+        printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line2, inner - 1, "", bdr);
+
+        printf("%s┣", bdr);
+        for (int i = 0; i < inner; i++) printf("─");
+        printf("┫" C_RESET "\n");
+
+        /* 统计行 */
+        snprintf(line3, sizeof(line3),
+                 " %s已扫描:%s %-10llu %s|%s %s已发现:%s %-10llu %s|%s %s已验证:%s %-10llu",
+                 C_WHITE, C_GREEN, (unsigned long long)g_state.total_scanned,
+                 bdr, C_RESET, C_WHITE, C_YELLOW, (unsigned long long)g_state.total_found,
+                 bdr, C_RESET, C_WHITE, C_HOT, (unsigned long long)g_state.total_verified);
+        printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line3, inner - 1, "", bdr);
+
+        /* 压背控制 */
+        if (g_config.backpressure.enabled) {
+            snprintf(line4, sizeof(line4),
+                     " %sCPU:%s %.1f%% %s|%s %s内存:%s %.0fMB %s|%s %s连接:%s %d/%d %s|%s %s限流:%s %s",
+                     C_WHITE, C_CYAN, g_config.backpressure.current_cpu,
+                     bdr, C_RESET, C_WHITE, C_CYAN, g_config.backpressure.current_mem,
+                     bdr, C_RESET, C_WHITE, C_CYAN, g_config.backpressure.current_connections, g_config.backpressure.max_connections,
+                     bdr, C_RESET, C_WHITE, g_config.backpressure.is_throttled ? C_RED "是" : C_GREEN "否");
+            printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line4, inner - 1, "", bdr);
         }
-        snprintf(line_buf[nl], sizeof(line_buf[nl]),
-                 "%s%-12s%s: %s%s%s",
-                 C_WHITE, fields[i], C_RESET, C_CYAN, val, C_RESET);
-        lines[nl] = line_buf[nl];
-        nl++;
-    }
-    free(raw);
 
-    render_single_panel(left_title, lines, nl, 72, 12);
-    printf("\n%s尚未支持自动刷新。%s按 Enter 返回主菜单…", C_DIM, C_RESET);
-    fflush(stdout);
-    while (getchar() != '\n');
+        /* 下边框 */
+        printf("%s┗", bdr);
+        for (int i = 0; i < inner; i++) printf("━");
+        printf("┛" C_RESET "\n");
+
+        printf("\n%s按 q+Enter 返回主菜单 (每2秒自动刷新)%s\n", C_DIM, C_RESET);
+        fflush(stdout);
+
+        /* 等待2秒，期间检测用户输入 */
+#ifdef _WIN32
+        saia_sleep(2000);
+#else
+        fd_set fds;
+        struct timeval tv;
+        FD_ZERO(&fds);
+        FD_SET(0, &fds);
+        tv.tv_sec = 2;
+        tv.tv_usec = 0;
+        int ret = select(1, &fds, NULL, NULL, &tv);
+        if (ret > 0) {
+            char buf[16] = {0};
+            if (fgets(buf, sizeof(buf), stdin)) {
+                if (buf[0] == 'q' || buf[0] == 'Q' || buf[0] == '0') break;
+            }
+        }
+#endif
+    }
+
     return 0;
 }
+
+
 
 // ==================== 主函数 ====================
 

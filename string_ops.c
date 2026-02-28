@@ -451,3 +451,69 @@ int expand_nodes_list(char **raw_lines, size_t raw_count,
     return 0;
 }
 
+/* 快速估算 IP 段展开后的数目 — 纯数学计算，不分配任何内存 */
+/* 对应 DEJI.py 的 estimate_expanded_target_count() */
+size_t estimate_expanded_count(const char *raw) {
+    if (!raw || !*raw) return 0;
+
+    /* 跳过空白 */
+    while (*raw && isspace((unsigned char)*raw)) raw++;
+    size_t len = strlen(raw);
+    if (len == 0) return 0;
+
+    /* CIDR: x.x.x.x/N */
+    const char *slash = strchr(raw, '/');
+    if (slash) {
+        int prefix = atoi(slash + 1);
+        if (prefix >= 0 && prefix <= 32) {
+            uint32_t host_bits = 32 - prefix;
+            if (host_bits == 0) return 1;
+            uint32_t n = (1U << host_bits);
+            return (n > 2) ? (size_t)(n - 2) : (size_t)n; /* 去掉网络地址和广播 */
+        }
+    }
+
+    /* 范围: x.x.x.A-B 或 x.x.x.A-y.y.y.B */
+    const char *dash = strchr(raw, '-');
+    if (dash) {
+        const char *right = dash + 1;
+        /* 短格式: 192.168.1.1-50 */
+        int is_short = 1;
+        for (const char *p = right; *p; p++) {
+            if (!isdigit((unsigned char)*p)) { is_short = 0; break; }
+        }
+        if (is_short && strlen(right) <= 3) {
+            /* 提取左边最后一段 */
+            char left_copy[64];
+            size_t dl = (size_t)(dash - raw);
+            if (dl >= sizeof(left_copy)) dl = sizeof(left_copy) - 1;
+            memcpy(left_copy, raw, dl);
+            left_copy[dl] = '\0';
+            char *last_dot = strrchr(left_copy, '.');
+            if (last_dot) {
+                int start_last = atoi(last_dot + 1);
+                int end_last = atoi(right);
+                if (end_last >= start_last && end_last <= 255) {
+                    return (size_t)(end_last - start_last + 1);
+                }
+            }
+        }
+        /* 全 IP 范围: 1.2.3.4-5.6.7.8 */
+        char left_ip[64], right_ip[64];
+        size_t dl = (size_t)(dash - raw);
+        if (dl < sizeof(left_ip)) {
+            memcpy(left_ip, raw, dl);
+            left_ip[dl] = '\0';
+            strncpy(right_ip, right, sizeof(right_ip) - 1);
+            right_ip[sizeof(right_ip) - 1] = '\0';
+            struct in_addr a, b;
+            if (inet_pton(AF_INET, left_ip, &a) == 1 && inet_pton(AF_INET, right_ip, &b) == 1) {
+                uint32_t sa = ntohl(a.s_addr);
+                uint32_t sb = ntohl(b.s_addr);
+                if (sb >= sa) return (size_t)(sb - sa + 1);
+            }
+        }
+    }
+
+    return 1; /* 单个 IP */
+}

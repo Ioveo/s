@@ -353,6 +353,7 @@ int dir_create(const char *path);
 
 // string_ops.c
 int expand_ip_range(const char *line, char ***out, size_t *count);
+size_t estimate_expanded_count(const char *raw);
 int expand_nodes_list(char **raw_lines, size_t raw_count, char ***expanded, size_t *exp_count);
 int parse_credentials(const char *line, credential_t *cred);
 int parse_ip_port_user_pass(const char *line, ip_port_t *addr, credential_t *cred);
