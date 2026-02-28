@@ -297,6 +297,10 @@ int saia_print_menu(void) {
 
 // ==================== 开始审计 ====================
 
+int saia_run_audit(void) {
+    return saia_run_audit_internal(0, 0, 0);
+}
+
 int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads) {
 
     char input[256];

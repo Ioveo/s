@@ -1,10 +1,7 @@
 [INFO] Compiling...
-missing_functions.c:377:20: warning: unused function 'render_progress_bar' [-Wunused-function]
-  377 | static const char *render_progress_bar(int done, int total, int width) {
-      |                    ^~~~~~~~~~~~~~~~~~~
-1 warning generated.
-ld: error: undefined symbol: file_read_all_n
->>> referenced by missing_functions.c
->>>               /tmp/missing_functions-71e7c8.o:(saia_realtime_monitor)
+ld: error: undefined symbol: saia_run_audit
+>>> referenced by main.c
+>>>               /tmp/main-5f11aa.o:(saia_nodes_menu)
 cc: error: linker command failed with exit code 1 (use -v to see invocation)
 [ERROR] Compilation failed. Re-run manually: cd /home/VUyJ3y7DCtUYd4/saia && cc *.c -o saia -lpthread -lm -std=c11
+[VUyJ3y7DCtUYd4@s16]:<~>$ 
