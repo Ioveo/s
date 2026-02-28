@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/local/bin/bash
 
 # Configuration
 REPO_URL="https://github.com/Ioveo/s.git"
@@ -13,19 +13,23 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 log() {
-    echo -e "${GREEN}[INFO]${NC} $1"
+    printf "${GREEN}[INFO]${NC} %s\n" "$1"
+}
+
+warn() {
+    printf "${YELLOW}[WARN]${NC} %s\n" "$1"
 }
 
 error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+    printf "${RED}[ERROR]${NC} %s\n" "$1"
     exit 1
 }
 
 check_env() {
     log "Checking environment..."
     command -v git >/dev/null 2>&1 || error "Git is not installed."
-    command -v screen >/dev/null 2>&1 || error "Screen is not installed."
-    
+    command -v screen >/dev/null 2>&1 || error "Screen is not installed. On Serv00, try: pkg install screen"
+
     # Try to find a working C compiler
     if command -v cc >/dev/null 2>&1; then COMPILER="cc";
     elif command -v gcc >/dev/null 2>&1; then COMPILER="gcc";
@@ -33,17 +37,24 @@ check_env() {
     elif command -v gcc10 >/dev/null 2>&1; then COMPILER="gcc10";
     elif command -v clang10 >/dev/null 2>&1; then COMPILER="clang10";
     else error "No C compiler found."; fi
-    
+
     log "Using compiler: $COMPILER"
+
+    # Determine extra GCC-only flags
+    case "$COMPILER" in
+        gcc*) EXTRA_FLAGS="-Wno-unused-but-set-variable" ;;
+        *)    EXTRA_FLAGS="" ;;
+    esac
 }
 
 fix_source_code() {
     log "Applying fixes to source code..."
-    
+    cd "$INSTALL_DIR" || error "fix_source_code: cannot cd to $INSTALL_DIR"
+
     # Fix 1: string_ops.c - strchr uses single quotes
     if [ -f "string_ops.c" ]; then
         # Use perl for in-place edit as it's more portable than sed -i
-        perl -pi -e "s/strchr\(p, \"\|\"\)/strchr(p, '|')/g" string_ops.c
+        perl -pi -e "s/strchr\\(p, \\\"\\|\\\"\\)/strchr(p, '|')/g" string_ops.c
         perl -pi -e "s/strnicmp/strncasecmp/g" string_ops.c
         log "Patched string_ops.c"
     fi
@@ -55,7 +66,7 @@ fix_source_code() {
             perl -pi -e 's/#endif/void color_white(void);\n#endif/' saia.h
             log "Patched saia.h (added color_white)"
         fi
-        
+
         # Fix 3: saia.h - Fix socket_connect_timeout declaration type mismatch
         perl -pi -e "s/int addrlen/socklen_t addrlen/g" saia.h
         log "Patched saia.h (fixed socket_connect_timeout type)"
@@ -79,17 +90,17 @@ int dns_resolve(const char *hostname, char *ip_buf, size_t size) {
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
-    
+
     if ((err = getaddrinfo(hostname, NULL, &hints, &res)) != 0) {
         return -1;
     }
-    
+
     struct sockaddr_in *ipv4 = (struct sockaddr_in *)res->ai_addr;
     if (!inet_ntop(AF_INET, &(ipv4->sin_addr), ip_buf, size)) {
         freeaddrinfo(res);
         return -1;
     }
-    
+
     freeaddrinfo(res);
     return 0;
 }
@@ -102,7 +113,7 @@ install_saia() {
     if [ -d "$INSTALL_DIR" ]; then
         log "Directory $INSTALL_DIR exists. Updating..."
         cd "$INSTALL_DIR" || error "Failed to access directory"
-        git pull || error "Git pull failed"
+        git pull || error "Git pull failed. Try: cd $INSTALL_DIR && git reset --hard HEAD && git pull"
     else
         log "Cloning repository..."
         git clone "$REPO_URL" "$INSTALL_DIR" || error "Git clone failed"
@@ -112,15 +123,18 @@ install_saia() {
     fix_source_code
 
     log "Compiling..."
+    cd "$INSTALL_DIR" || error "Failed to access install directory"
     rm -f "$BIN_NAME"
-    
-    # Compile
-    $COMPILER *.c -o "$BIN_NAME" -lpthread -lm -std=c11 -Wall -O2 -Wno-format -Wno-unused-variable -Wno-unused-but-set-variable -Wno-implicit-function-declaration
-    
+
+    # Compile (EXTRA_FLAGS is GCC-only; clang does not support -Wno-unused-but-set-variable)
+    $COMPILER *.c -o "$BIN_NAME" -lpthread -lm -std=c11 -Wall -O2 \
+        -Wno-format -Wno-unused-variable $EXTRA_FLAGS \
+        -Wno-implicit-function-declaration
+
     if [ ! -f "$BIN_NAME" ]; then
-        error "Compilation failed. Check output above."
+        error "Compilation failed. Re-run manually: cd $INSTALL_DIR && $COMPILER *.c -o $BIN_NAME -lpthread -lm -std=c11"
     fi
-    
+
     chmod +x "$BIN_NAME"
     log "Build successful."
 }
@@ -128,7 +142,7 @@ install_saia() {
 create_wrapper() {
     log "Creating management script..."
     cat << EOF > "$INSTALL_DIR/saia_manager.sh"
-#!/bin/bash
+#!/usr/local/bin/bash
 CMD="\$1"
 DIR="$INSTALL_DIR"
 BIN="./$BIN_NAME"
@@ -166,16 +180,26 @@ case "\$CMD" in
 esac
 EOF
     chmod +x "$INSTALL_DIR/saia_manager.sh"
-    
-    if ! grep -q "alias saia=" ~/.bashrc; then
-        echo "alias saia='$INSTALL_DIR/saia_manager.sh'" >> ~/.bashrc
+
+    # 自动判断 shell 类型，写入对应配置文件
+    case "$SHELL" in
+        */bash) SHELL_RC="$HOME/.bashrc" ;;
+        */zsh)  SHELL_RC="$HOME/.zshrc" ;;
+        *)      SHELL_RC="$HOME/.profile" ;;
+    esac
+
+    if ! grep -q "alias saia=" "$SHELL_RC" 2>/dev/null; then
+        echo "alias saia='$INSTALL_DIR/saia_manager.sh'" >> "$SHELL_RC"
+        log "Alias added to $SHELL_RC"
     fi
 }
 
 setup_autostart() {
-    log "Setting up autostart..."
+    log "Setting up autostart via crontab..."
     CRON_CMD="@reboot $INSTALL_DIR/saia_manager.sh start"
-    (crontab -l 2>/dev/null | grep -v "saia_manager.sh"; echo "$CRON_CMD") | crontab -
+    if ! (crontab -l 2>/dev/null | grep -v "saia_manager.sh"; echo "$CRON_CMD") | crontab - 2>/dev/null; then
+        warn "crontab setup failed. Please add autostart manually via the Serv00 panel."
+    fi
 }
 
 main() {
@@ -184,17 +208,13 @@ main() {
     create_wrapper
     setup_autostart
     "$INSTALL_DIR/saia_manager.sh" start
-    echo -e "
-${YELLOW}================================================${NC}
-${GREEN}安装完成！程序已在后台运行。${NC}
-${YELLOW}请在终端复制粘贴并回车执行以下命令来呼出菜单：${NC}
-
-    ${GREEN}source ~/.bashrc && saia${NC}
-
-${YELLOW}以后无论何时，只要在终端输入 ${GREEN}saia${YELLOW} 即可直接打开菜单！
-离开菜单按 Ctrl+A 然后按 D 即可保持后台运行。${NC}
-${YELLOW}================================================${NC}
-"
+    printf "\n${YELLOW}================================================${NC}\n"
+    printf "${GREEN}安装完成！程序已在后台运行。${NC}\n"
+    printf "${YELLOW}请在终端复制粘贴并回车执行以下命令来呼出菜单：${NC}\n\n"
+    printf "    ${GREEN}source %s && saia${NC}\n\n" "$SHELL_RC"
+    printf "${YELLOW}以后无论何时，只要在终端输入 ${GREEN}saia${YELLOW} 即可直接打开菜单！${NC}\n"
+    printf "${YELLOW}离开菜单按 Ctrl+A 然后按 D 即可保持后台运行。${NC}\n"
+    printf "${YELLOW}================================================${NC}\n\n"
 }
 
 main

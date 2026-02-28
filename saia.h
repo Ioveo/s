@@ -57,7 +57,7 @@
 #define MAX_THREADS 2000
 #define DEFAULT_TIMEOUT 5
 #define MAX_RETRY 3
-#define BUFFER_SIZE 4096
+#define BUFFER_SIZE 65536
 
 // 文件大小限制
 #define MAX_LOG_BYTES (2 * 1024 * 1024)
@@ -106,8 +106,8 @@ typedef struct {
 
 // 认证凭据
 typedef struct {
-    char username[256];
-    char password[256];
+    char username[4096];  // 扩展至 4K，支持长 token
+    char password[4096];  // 扩展至 4K，支持长 token
 } credential_t;
 
 // 扫描目标

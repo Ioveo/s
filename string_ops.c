@@ -182,7 +182,7 @@ int extract_country_asn(const char *line, char *country, char *asn) {
             const char *asn_start = p + 2;
             while (*asn_start && isspace(*asn_start)) asn_start++;
             
-            if (strnicmp(asn_start, "AS", 2) == 0) {
+            if (strncasecmp(asn_start, "AS", 2) == 0) {
                 const char *asn_end = asn_start + 2;
                 while (*asn_end && isdigit(*asn_end)) asn_end++;
                 size_t asn_len = asn_end - asn_start;
@@ -196,7 +196,7 @@ int extract_country_asn(const char *line, char *country, char *asn) {
         }
         
         // 移动到下一个"|"
-        p = strchr(p, "|");
+        p = strchr(p, '|');
     }
     
     // 尝试直接查找ASN

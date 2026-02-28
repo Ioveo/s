@@ -617,7 +617,7 @@ int saia_report_menu(void) {
 
     char report_path[MAX_PATH_LENGTH];
 
-    snprintf(report_path, sizeof(report_path), "%s\\audit_report.log",
+    snprintf(report_path, sizeof(report_path), "%s/audit_report.log",
 
              g_config.base_dir);
 
@@ -844,7 +844,7 @@ int saia_nodes_menu(void) {
 
     char nodes_path[MAX_PATH_LENGTH];
 
-    snprintf(nodes_path, sizeof(nodes_path), "%s\\nodes.list",
+    snprintf(nodes_path, sizeof(nodes_path), "%s/nodes.list",
 
              g_config.base_dir);
 

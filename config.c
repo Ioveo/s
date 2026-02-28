@@ -18,20 +18,20 @@ int config_init(config_t *cfg, const char *base_dir) {
     strncpy(cfg->base_dir, base_dir, sizeof(cfg->base_dir) - 1);
 
     // 文件路径
-    snprintf(cfg->state_file, sizeof(cfg->state_file), "%s\\sys_audit_state.json",
+    snprintf(cfg->state_file, sizeof(cfg->state_file), "%s/sys_audit_state.json",
              base_dir);
-    snprintf(cfg->log_file, sizeof(cfg->log_file), "%s\\sys_audit_events.log",
+    snprintf(cfg->log_file, sizeof(cfg->log_file), "%s/sys_audit_events.log",
              base_dir);
-    snprintf(cfg->report_file, sizeof(cfg->report_file), "%s\\audit_report.log",
+    snprintf(cfg->report_file, sizeof(cfg->report_file), "%s/audit_report.log",
              base_dir);
-    snprintf(cfg->nodes_file, sizeof(cfg->nodes_file), "%s\\nodes.list",
+    snprintf(cfg->nodes_file, sizeof(cfg->nodes_file), "%s/nodes.list",
              base_dir);
-    snprintf(cfg->tokens_file, sizeof(cfg->tokens_file), "%s\\tokens.list",
+    snprintf(cfg->tokens_file, sizeof(cfg->tokens_file), "%s/tokens.list",
              base_dir);
-    snprintf(cfg->ip_lib_file, sizeof(cfg->ip_lib_file), "%s\\ip_lib.txt",
+    snprintf(cfg->ip_lib_file, sizeof(cfg->ip_lib_file), "%s/ip_lib.txt",
              base_dir);
     snprintf(cfg->telegram_config_file, sizeof(cfg->telegram_config_file),
-             "%s\\telegram_notify.json", base_dir);
+             "%s/telegram_notify.json", base_dir);
 
     // 默认值
     cfg->mode = MODE_XUI;

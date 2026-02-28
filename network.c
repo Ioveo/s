@@ -87,7 +87,9 @@ int ip_parse(const char *str, ip_addr_t *addr) {
         return 0;
     }
     
-    if (inet_pton(AF_INET, str, &addr->ip_int) <= 0) {
+    /* Validate it's a real IPv4 address using inet_pton into a temp buffer */
+    struct in_addr tmp;
+    if (inet_pton(AF_INET, str, &tmp) <= 0) {
         return -1;
     }
     
