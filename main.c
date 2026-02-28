@@ -40,6 +40,14 @@ BOOL WINAPI saia_console_handler(DWORD dwCtrlType) {
 
 }
 
+void saia_flush_stdin(void) {
+    int c;
+    // 使用非阻塞读取或简单的循环直到换行/EOF? 
+    // 在 blocking mode 下很难做完美 flush，但可以尝试读取直到没有数据 (配合 poll)
+    // 这里简单做: 如果收到了信号，我们可能无法安全调用 IO。
+    // 所以主要是在 break 循环后调用。
+}
+
 void saia_signal_handler(int signum) {
 
     (void)signum;
@@ -49,6 +57,14 @@ void saia_signal_handler(int signum) {
 }
 
 #else
+
+void saia_flush_stdin(void) {
+    int c;
+    // 使用非阻塞读取或简单的循环直到换行/EOF? 
+    // 在 blocking mode 下很难做完美 flush，但可以尝试读取直到没有数据 (配合 poll)
+    // 这里简单做: 如果收到了信号，我们可能无法安全调用 IO。
+    // 所以主要是在 break 循环后调用。
+}
 
 void saia_signal_handler(int signum) {
 
@@ -1026,6 +1042,41 @@ int saia_credentials_menu(void) {
         }
 
         case 2: {
+            color_cyan();
+            printf(">>> 从文件导入 Tokens (请输入文件路径):\n");
+            color_reset();
+            
+            char import_path[4096];
+            if (fgets(import_path, sizeof(import_path), stdin)) {
+                import_path[strcspn(import_path, "\n")] = '\0';
+                char *trimmed_path = str_trim(import_path);
+                
+                if (strlen(trimmed_path) > 0 && file_exists(trimmed_path)) {
+                    // 简单的文件追加逻辑
+                    char *content = file_read_all(trimmed_path);
+                    if (content) {
+                        file_append(tokens_path, content);
+                        // 统计行数
+                        int count = 0;
+                        char *p = content;
+                        while (*p) { if (*p == '\n') count++; p++; }
+                        free(content);
+                        
+                        color_green();
+                        printf(">>> 成功导入约 %d 条凭据\n", count);
+                        color_reset();
+                    } else {
+                        color_red();
+                        printf(">>> 读取文件失败\n");
+                        color_reset();
+                    }
+                } else {
+                    color_red();
+                    printf(">>> 文件不存在或路径无效\n");
+                    color_reset();
+                }
+            }
+            break;
 
             color_cyan();
 
@@ -1170,6 +1221,41 @@ int saia_telegram_menu(void) {
             break;
 
         case 2: {
+            color_cyan();
+            printf(">>> 从文件导入 Tokens (请输入文件路径):\n");
+            color_reset();
+            
+            char import_path[4096];
+            if (fgets(import_path, sizeof(import_path), stdin)) {
+                import_path[strcspn(import_path, "\n")] = '\0';
+                char *trimmed_path = str_trim(import_path);
+                
+                if (strlen(trimmed_path) > 0 && file_exists(trimmed_path)) {
+                    // 简单的文件追加逻辑
+                    char *content = file_read_all(trimmed_path);
+                    if (content) {
+                        file_append(tokens_path, content);
+                        // 统计行数
+                        int count = 0;
+                        char *p = content;
+                        while (*p) { if (*p == '\n') count++; p++; }
+                        free(content);
+                        
+                        color_green();
+                        printf(">>> 成功导入约 %d 条凭据\n", count);
+                        color_reset();
+                    } else {
+                        color_red();
+                        printf(">>> 读取文件失败\n");
+                        color_reset();
+                    }
+                } else {
+                    color_red();
+                    printf(">>> 文件不存在或路径无效\n");
+                    color_reset();
+                }
+            }
+            break;
 
             char input[512];
 
@@ -1246,6 +1332,41 @@ int saia_backpressure_menu(void) {
             break;
 
         case 2: {
+            color_cyan();
+            printf(">>> 从文件导入 Tokens (请输入文件路径):\n");
+            color_reset();
+            
+            char import_path[4096];
+            if (fgets(import_path, sizeof(import_path), stdin)) {
+                import_path[strcspn(import_path, "\n")] = '\0';
+                char *trimmed_path = str_trim(import_path);
+                
+                if (strlen(trimmed_path) > 0 && file_exists(trimmed_path)) {
+                    // 简单的文件追加逻辑
+                    char *content = file_read_all(trimmed_path);
+                    if (content) {
+                        file_append(tokens_path, content);
+                        // 统计行数
+                        int count = 0;
+                        char *p = content;
+                        while (*p) { if (*p == '\n') count++; p++; }
+                        free(content);
+                        
+                        color_green();
+                        printf(">>> 成功导入约 %d 条凭据\n", count);
+                        color_reset();
+                    } else {
+                        color_red();
+                        printf(">>> 读取文件失败\n");
+                        color_reset();
+                    }
+                } else {
+                    color_red();
+                    printf(">>> 文件不存在或路径无效\n");
+                    color_reset();
+                }
+            }
+            break;
             char input[256];
             printf("CPU阈值 [%%] [当前=%.1f]: ",
                    g_config.backpressure.cpu_threshold);
@@ -1269,7 +1390,6 @@ int saia_backpressure_menu(void) {
             }
 
             printf("配置已更新\n");
-            break;
         }
 
         case 3:
@@ -1497,7 +1617,6 @@ int main(int argc, char *argv[]) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--auto") == 0) {
             auto_run = 1;
-            break;
         }
     }
 
