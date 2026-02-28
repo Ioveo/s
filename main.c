@@ -148,7 +148,7 @@ void saia_print_stats(state_t *state) {
 
     printf("  运行时间: %02d:%02d:%02d\n", hours, minutes, seconds);
 
-    printf("  模式: %s (%s)\n", state->mode == 1 ? "XUI专项" :\n\nstate->mode == 2 ? "S5专项" :\n\nstate->mode == 3 ? "深度全能" : "验真模式", state->work_mode == 1 ? "探索" :\n\nstate->work_mode == 2 ? "探索+验真" : "只留极品");
+    printf("  模式: %s (%s)\n", state->mode == 1 ? "XUI专项" :state->mode == 2 ? "S5专项" :state->mode == 3 ? "深度全能" : "验真模式", state->work_mode == 1 ? "探索" :state->work_mode == 2 ? "探索+验真" : "只留极品");
 
     printf("  并发线程: %d\n", state->threads);
 
@@ -1202,3 +1202,6 @@ int saia_telegram_menu(void) {
             break;
 
         }
+    }
+    return 0;
+}
