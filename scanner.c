@@ -438,6 +438,13 @@ static int g_skip_cache_ready = 0;
 static int g_skip_cache_resume_enabled = 0;
 static int g_skip_cache_history_enabled = 0;
 
+static long long file_size_bytes(const char *path) {
+    if (!path || !*path) return -1;
+    struct stat st;
+    if (stat(path, &st) != 0) return -1;
+    return (long long)st.st_size;
+}
+
 static void write_scan_progress(feed_context_t *ctx, const char *status) {
     if (!ctx || !ctx->progress_file[0]) return;
     char payload[1024];
@@ -545,11 +552,15 @@ static void load_target_set_file(const char *path, target_set_t *set) {
     size_t lc = 0;
     if (file_read_lines(path, &lines, &lc) != 0 || !lines) return;
 
-    for (size_t i = 0; i < lc; i++) {
+    const size_t max_load = 200000;
+    for (size_t i = 0; i < lc && i < max_load; i++) {
         char *line = lines[i] ? str_trim(lines[i]) : NULL;
         if (line && *line) {
             (void)target_set_add(set, line);
         }
+        free(lines[i]);
+    }
+    for (size_t i = (lc < max_load ? lc : max_load); i < lc; i++) {
         free(lines[i]);
     }
     free(lines);
@@ -639,7 +650,7 @@ static int feed_single_target(const char *ip, void *userdata) {
         saia_sleep(ms);
     }
 
-    if (ctx->fed_count % 500 == 0 || ctx->fed_count == ctx->est_total) {
+    if (ctx->fed_count % 20 == 0 || ctx->fed_count == ctx->est_total) {
         MUTEX_LOCK(lock_stats);
         int rt = running_threads;
         uint64_t scanned = g_state.total_scanned;
@@ -907,10 +918,15 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
         }
 
         if (g_config.skip_scanned && target_set_init(&g_history_cache, 131071) == 0) {
-            g_skip_cache_history_enabled = 1;
             char history_file[MAX_PATH_LENGTH];
             snprintf(history_file, sizeof(history_file), "%s/scanned_history.log", g_config.base_dir);
-            load_target_set_file(history_file, &g_history_cache);
+            long long hsize = file_size_bytes(history_file);
+            if (hsize >= 0 && hsize <= (20LL * 1024 * 1024)) {
+                g_skip_cache_history_enabled = 1;
+                load_target_set_file(history_file, &g_history_cache);
+            } else {
+                g_skip_cache_history_enabled = 0;
+            }
         }
 
         g_skip_cache_ready = 1;

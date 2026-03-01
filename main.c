@@ -238,6 +238,40 @@ static void saia_fit_line(const char *src, char *dst, size_t dst_size, size_t ma
     snprintf(dst, dst_size, "%.*s...", (int)(max_len - 3), src);
 }
 
+static int saia_text_display_width(const char *s) {
+    if (!s) return 0;
+    int w = 0;
+    const unsigned char *p = (const unsigned char *)s;
+    while (*p) {
+        if (*p < 0x80) {
+            w += 1;
+            p += 1;
+        } else if ((*p & 0xE0) == 0xC0 && p[1]) {
+            w += 1;
+            p += 2;
+        } else if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) {
+            w += 2;
+            p += 3;
+        } else if ((*p & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) {
+            w += 2;
+            p += 4;
+        } else {
+            w += 1;
+            p += 1;
+        }
+    }
+    return w;
+}
+
+static void saia_print_panel_line(const char *bdr, const char *text, int inner) {
+    int maxw = inner - 2;
+    int tw = saia_text_display_width(text);
+    if (tw > maxw) tw = maxw;
+    int pad = maxw - tw;
+    if (pad < 0) pad = 0;
+    printf("%s┃ %s%*s ┃%s\n", bdr, text, pad, "", C_RESET);
+}
+
 static size_t saia_count_file_lines(const char *path) {
     char **lines = NULL;
     size_t lc = 0;
