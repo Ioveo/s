@@ -213,6 +213,13 @@ static int saia_menu_is_scan_running(void) {
 #endif
 }
 
+static const char *saia_menu_spinner(int running) {
+    static const char *frames[] = {"[•□□□]", "[□•□□]", "[□□•□]", "[□□□•]"};
+    if (!running) return "[□□□□]";
+    time_t now = time(NULL);
+    return frames[(int)(now % 4)];
+}
+
 static void saia_menu_count_report(uint64_t *xui_found, uint64_t *xui_verified,
                                    uint64_t *s5_found, uint64_t *s5_verified,
                                    uint64_t *total_found, uint64_t *total_verified) {
@@ -249,7 +256,7 @@ int saia_print_menu(void) {
 
     char left[8][160];
     char right[8][160];
-    snprintf(left[0], sizeof(left[0]), "SAIA MASTER CONSOLE v%s", SAIA_VERSION);
+    snprintf(left[0], sizeof(left[0]), "SAIA MASTER CONSOLE v%s %s", SAIA_VERSION, saia_menu_spinner(scan_running));
     snprintf(left[1], sizeof(left[1]), "审计任务:%s | 断点续连:%s | Telegram:%s", scan_running ? "RUNNING" : "STOPPED", g_config.resume_enabled ? "ON" : "OFF", g_config.telegram_enabled ? "ON" : "OFF");
     snprintf(left[2], sizeof(left[2]), "模式:%d | 策略:%d | 线程:%d", g_config.mode, g_config.scan_mode, g_config.threads);
     snprintf(left[3], sizeof(left[3]), "总发现:%llu | 总验真:%llu", (unsigned long long)total_found, (unsigned long long)total_verified);
@@ -258,7 +265,7 @@ int saia_print_menu(void) {
     snprintf(left[6], sizeof(left[6]), "CPU: %.1f%% | MEM_FREE: %.0fMB", g_config.backpressure.current_cpu, g_config.backpressure.current_mem);
     snprintf(left[7], sizeof(left[7]), "状态: %s", scan_running ? "Running" : "Idle");
 
-    snprintf(right[0], sizeof(right[0]), "MONITOR DETAIL | 运行细节");
+    snprintf(right[0], sizeof(right[0]), "MONITOR DETAIL | 运行细节 %s", saia_menu_spinner(scan_running));
     snprintf(right[1], sizeof(right[1]), "后台会话: %s", scan_running ? "saia_scan RUNNING" : "NOT FOUND");
     snprintf(right[2], sizeof(right[2]), "工作目录: %s", g_config.base_dir);
     snprintf(right[3], sizeof(right[3]), "报告文件: %s", g_config.report_file);

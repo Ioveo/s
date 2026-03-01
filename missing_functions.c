@@ -9,6 +9,13 @@ typedef struct {
 
 static volatile sig_atomic_t g_audit_running = 0;
 
+static const char *saia_dash_spinner(int running) {
+    static const char *frames[] = {"[•□□□]", "[□•□□]", "[□□•□]", "[□□□•]"};
+    if (!running) return "[□□□□]";
+    time_t now = time(NULL);
+    return frames[(int)(now % 4)];
+}
+
 static int saia_is_scan_session_running(void) {
 #ifdef _WIN32
     return g_audit_running ? 1 : 0;
@@ -929,7 +936,7 @@ int saia_realtime_monitor(void) {
 
         char left[8][180];
         char right[8][180];
-        snprintf(left[0], sizeof(left[0]), "SAIA MONITOR v%s", SAIA_VERSION);
+        snprintf(left[0], sizeof(left[0]), "SAIA MONITOR v%s %s", SAIA_VERSION, saia_dash_spinner(scan_running));
         snprintf(left[1], sizeof(left[1]), "状态:%s | 模式:%s", status_str, mode_str);
         snprintf(left[2], sizeof(left[2]), "策略:%s | 运行:%02d:%02d:%02d", scan_str, hours, mins, secs);
         snprintf(left[3], sizeof(left[3]), "总发现:%llu | 总验真:%llu", (unsigned long long)total_found, (unsigned long long)total_verified);
@@ -938,7 +945,7 @@ int saia_realtime_monitor(void) {
         snprintf(left[6], sizeof(left[6]), "线程:%d | 会话:%s", g_config.threads, scan_running ? "RUNNING" : "STOPPED");
         snprintf(left[7], sizeof(left[7]), "报告: %s", g_config.report_file);
 
-        snprintf(right[0], sizeof(right[0]), "MONITOR DETAIL | 运行细节");
+        snprintf(right[0], sizeof(right[0]), "MONITOR DETAIL | 运行细节 %s", saia_dash_spinner(scan_running));
         snprintf(right[1], sizeof(right[1]), "压背: %s", g_config.backpressure.enabled ? "ON" : "OFF");
         snprintf(right[2], sizeof(right[2]), "CPU: %.1f%% | MEM_FREE: %.0fMB", g_config.backpressure.current_cpu, g_config.backpressure.current_mem);
         snprintf(right[3], sizeof(right[3]), "连接: %d/%d", g_config.backpressure.current_connections, g_config.backpressure.max_connections);
