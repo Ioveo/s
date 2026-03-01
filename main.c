@@ -965,7 +965,7 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
     return count;
 }
 
-static int saia_write_tokens_single_paste(const char *file_path) {
+static int saia_write_tokens_single_paste(const char *file_path, int append_mode) {
     if (!file_path || !*file_path) return -1;
 
     char tmp_path[4096];
@@ -973,6 +973,18 @@ static int saia_write_tokens_single_paste(const char *file_path) {
 
     FILE *fp = fopen(tmp_path, "w");
     if (!fp) return -1;
+
+    if (append_mode && file_exists(file_path)) {
+        char *content = file_read_all(file_path);
+        if (content) {
+            fprintf(fp, "%s", content);
+            size_t len = strlen(content);
+            if (len > 0 && content[len - 1] != '\n') {
+                fprintf(fp, "\n");
+            }
+            free(content);
+        }
+    }
 
     char buffer[65536];
     if (!fgets(buffer, sizeof(buffer), stdin)) {
@@ -1174,15 +1186,24 @@ int saia_nodes_menu(void) {
         }
         case 14: {
             char tokens_path[MAX_PATH_LENGTH];
+            char mode_input[16];
+            int append_mode = 0;
             snprintf(tokens_path, sizeof(tokens_path), "%s/tokens.list", g_config.base_dir);
             color_cyan();
             printf("\n>>> [14] 更新 Tokens\n");
             color_reset();
+            printf("[1] 覆盖现有\n");
+            printf("[2] 追加到现有\n");
+            printf("请选择 [1/2] (默认1): ");
+            fflush(stdout);
+            if (fgets(mode_input, sizeof(mode_input), stdin) && mode_input[0] == '2') {
+                append_mode = 1;
+            }
             printf("请一次性粘贴 token/user:pass 列表，然后回车。\n");
-            int count = saia_write_tokens_single_paste(tokens_path);
+            int count = saia_write_tokens_single_paste(tokens_path, append_mode);
             if (count >= 0) {
                 color_green();
-                printf(">>> Tokens 已更新，本次写入 %d 条\n\n", count);
+                printf(">>> Tokens 已%s，本次写入 %d 条\n\n", append_mode ? "追加" : "覆盖", count);
                 color_reset();
             } else {
                 color_red();
