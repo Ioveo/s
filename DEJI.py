@@ -3266,101 +3266,100 @@ async def internal_audit_process(mode, work_mode, threads, ports, feed_int):
                         await close_writer(writer_chk)
 
                 if mode in (1, 3):
-                    for p in xui_ports:
+                    hit = False
+                    xui_ports_list = list(xui_ports)
+                    for i in range(0, len(xui_ports_list), 5):
+                        batch = xui_ports_list[i:i+5]
                         async with state_lock:
                             state["current_service"] = "XUI"
-                            state["current_port"] = str(p)
-                        x_r = await audit_xui(
-                            ip,
-                            p,
-                            tokens,
-                            state,
-                            state_lock,
-                            work_mode,
-                            conn_limiter,
-                            token_sem,
-                            False,
-                        )
-                        if x_r:
-                            await handle_found_results([x_r])
+                            state["current_port"] = f"batch({len(batch)})"
+                        
+                        tasks = [audit_xui(
+                            ip, p, tokens, state, state_lock, work_mode, conn_limiter, token_sem, False
+                        ) for p in batch]
+                        
+                        results = await asyncio.gather(*tasks, return_exceptions=True)
+                        for r in results:
+                            if isinstance(r, str) and r:
+                                await handle_found_results([r])
+                                hit = True
+                        if hit:
                             break
 
                 if mode in (2, 3):
-                    for p in s5_ports:
+                    hit = False
+                    s5_ports_list = list(s5_ports)
+                    for i in range(0, len(s5_ports_list), 5):
+                        batch = s5_ports_list[i:i+5]
                         async with state_lock:
                             state["current_service"] = "S5"
-                            state["current_port"] = str(p)
-                        s_r = await audit_socks5(
-                            ip,
-                            p,
-                            tokens,
-                            state,
-                            state_lock,
-                            work_mode,
-                            conn_limiter,
-                            token_sem,
-                        )
-                        if s_r:
-                            await handle_found_results([s_r])
+                            state["current_port"] = f"batch({len(batch)})"
+                        
+                        tasks = [audit_socks5(
+                            ip, p, tokens, state, state_lock, work_mode, conn_limiter, token_sem
+                        ) for p in batch]
+                        
+                        results = await asyncio.gather(*tasks, return_exceptions=True)
+                        for r in results:
+                            if isinstance(r, str) and r:
+                                await handle_found_results([r])
+                                hit = True
+                        if hit:
                             break
 
                 if mode == 4:
                     verify_ports = [forced_port] if forced_port else list(ports)
                     verified_hit = False
-                    for p in verify_ports:
+                    for i in range(0, len(verify_ports), 5):
+                        batch = verify_ports[i:i+5]
                         async with state_lock:
                             state["current_service"] = "TCP-CHECK"
-                            state["current_port"] = str(p)
-                            state["current"] = f"Probe -> {ip}:{p}"
+                            state["current_port"] = f"batch({len(batch)})"
+                            state["current"] = f"Probe -> {ip}:batch({len(batch)})"
 
-                        alive = await check_target_alive(ip, p)
-                        async with state_lock:
-                            state["verify_checked"] = state.get("verify_checked", 0) + 1
-                            if alive:
-                                state["verify_alive"] = state.get("verify_alive", 0) + 1
-                                state["verify_line"] = f"PROBE_OK {ip}:{p}"
-                            else:
-                                state["verify_line"] = f"PROBE_FAIL {ip}:{p}"
+                        probe_tasks = [check_target_alive(ip, p) for p in batch]
+                        probe_results = await asyncio.gather(*probe_tasks, return_exceptions=True)
+                        
+                        alive_ports = []
+                        for p, alive in zip(batch, probe_results):
+                            async with state_lock:
+                                state["verify_checked"] = state.get("verify_checked", 0) + 1
+                                if isinstance(alive, bool) and alive:
+                                    state["verify_alive"] = state.get("verify_alive", 0) + 1
+                                    state["verify_line"] = f"PROBE_OK {ip}:{p}"
+                                    alive_ports.append(p)
+                                else:
+                                    state["verify_line"] = f"PROBE_FAIL {ip}:{p}"
 
-                        if not alive:
+                        if not alive_ports:
                             continue
 
                         async with state_lock:
-                            state["current_service"] = "XUI-VERIFY"
-                            state["current_port"] = str(p)
-                        x_r = await audit_xui(
-                            ip,
-                            p,
-                            tokens,
-                            state,
-                            state_lock,
-                            3,
-                            conn_limiter,
-                            token_sem,
-                            True,
-                        )
-                        if x_r and is_verified_output_line(x_r):
-                            await handle_found_results([x_r])
-                            verified_hit = True
-                            break
+                            state["current_service"] = "VERIFY"
+                            state["current_port"] = f"alive({len(alive_ports)})"
 
-                        async with state_lock:
-                            state["current_service"] = "S5-VERIFY"
-                            state["current_port"] = str(p)
-                        s_r = await audit_socks5(
-                            ip,
-                            p,
-                            tokens,
-                            state,
-                            state_lock,
-                            3,
-                            conn_limiter,
-                            token_sem,
-                        )
-                        if s_r and is_verified_output_line(s_r):
-                            await handle_found_results([s_r])
-                            verified_hit = True
+                        xui_tasks = [audit_xui(
+                            ip, p, tokens, state, state_lock, 3, conn_limiter, token_sem, True
+                        ) for p in alive_ports]
+                        s5_tasks = [audit_socks5(
+                            ip, p, tokens, state, state_lock, 3, conn_limiter, token_sem
+                        ) for p in alive_ports]
+
+                        xui_res = await asyncio.gather(*xui_tasks, return_exceptions=True)
+                        for r in xui_res:
+                            if isinstance(r, str) and r and is_verified_output_line(r):
+                                await handle_found_results([r])
+                                verified_hit = True
+
+                        s5_res = await asyncio.gather(*s5_tasks, return_exceptions=True)
+                        for r in s5_res:
+                            if isinstance(r, str) and r and is_verified_output_line(r):
+                                await handle_found_results([r])
+                                verified_hit = True
+
+                        if verified_hit:
                             break
+                            
                     if not verified_hit:
                         async with state_lock:
                             state["current"] = f"Verify miss -> {target_id}"

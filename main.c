@@ -220,22 +220,68 @@ static const char *saia_menu_spinner(int running) {
     return frames[(int)(now % 4)];
 }
 
+static size_t saia_utf8_char_len(const unsigned char *p) {
+    if (!p || !*p) return 0;
+    if (*p < 0x80) return 1;
+    if ((*p & 0xE0) == 0xC0 && p[1]) return 2;
+    if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) return 3;
+    if ((*p & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) return 4;
+    return 1;
+}
+
+static int saia_utf8_char_width(const unsigned char *p, size_t len) {
+    if (!p || len == 0) return 0;
+    if (len == 1 && p[0] < 0x80) return 1;
+    if (len == 2) return 1;
+    if (len == 3) return 2;
+    if (len == 4) return 2;
+    return 1;
+}
+
 static void saia_fit_line(const char *src, char *dst, size_t dst_size, size_t max_len) {
     if (!dst || dst_size == 0) return;
     if (!src) {
         dst[0] = '\0';
         return;
     }
-    size_t n = strlen(src);
-    if (n <= max_len) {
-        snprintf(dst, dst_size, "%s", src);
-        return;
+    const unsigned char *p = (const unsigned char *)src;
+    size_t out = 0;
+    size_t width = 0;
+    int clipped = 0;
+
+    while (*p && out + 4 < dst_size) {
+        size_t clen = saia_utf8_char_len(p);
+        int cw = saia_utf8_char_width(p, clen);
+        if (width + (size_t)cw > max_len) {
+            clipped = 1;
+            break;
+        }
+        if (out + clen >= dst_size) break;
+        memcpy(dst + out, p, clen);
+        out += clen;
+        width += (size_t)cw;
+        p += clen;
     }
-    if (max_len <= 3) {
-        snprintf(dst, dst_size, "%.*s", (int)max_len, src);
-        return;
+
+    dst[out] = '\0';
+
+    if (clipped && max_len > 3) {
+        while (out > 0 && width > max_len - 3) {
+            size_t back = 1;
+            while (back < out && ((dst[out - back] & 0xC0) == 0x80)) back++;
+            size_t start = out - back;
+            size_t clen = out - start;
+            int cw = saia_utf8_char_width((const unsigned char *)(dst + start), clen);
+            out = start;
+            width -= (size_t)cw;
+            dst[out] = '\0';
+        }
+        if (out + 3 < dst_size) {
+            memcpy(dst + out, "...", 3);
+            out += 3;
+            dst[out] = '\0';
+        }
     }
-    snprintf(dst, dst_size, "%.*s...", (int)(max_len - 3), src);
 }
 
 static int saia_text_display_width(const char *s) {
@@ -261,6 +307,44 @@ static int saia_text_display_width(const char *s) {
         }
     }
     return w;
+}
+
+static int saia_terminal_columns(void) {
+#ifdef _WIN32
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+        int cols = (int)(csbi.srWindow.Right - csbi.srWindow.Left + 1);
+        if (cols > 0) return cols;
+    }
+#else
+    struct winsize ws;
+    if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+        return (int)ws.ws_col;
+    }
+#endif
+    {
+        const char *env_cols = getenv("COLUMNS");
+        if (env_cols && *env_cols) {
+            int cols = atoi(env_cols);
+            if (cols > 0) return cols;
+        }
+    }
+    return 120;
+}
+
+static void saia_print_dual_panel_line(const char *bdr, const char *left, const char *right, int inner) {
+    int maxw = inner - 2;
+    int lw = saia_text_display_width(left);
+    int rw = saia_text_display_width(right);
+    int lpad = maxw - lw;
+    int rpad = maxw - rw;
+    if (lpad < 0) lpad = 0;
+    if (rpad < 0) rpad = 0;
+    printf("%s┃ %s", bdr, left);
+    for (int i = 0; i < lpad; i++) putchar(' ');
+    printf(" ┃  %s┃ %s", bdr, right);
+    for (int i = 0; i < rpad; i++) putchar(' ');
+    printf(" ┃%s\n", C_RESET);
 }
 
 static void saia_print_panel_line(const char *bdr, const char *text, int inner) {
@@ -409,6 +493,7 @@ typedef struct {
     int threads;
     char current_ip[64];
     int current_port;
+    uint64_t updated_ms;
 } scan_progress_t;
 
 static void load_scan_progress(scan_progress_t *p) {
@@ -441,6 +526,8 @@ static void load_scan_progress(scan_progress_t *p) {
             snprintf(p->current_ip, sizeof(p->current_ip), "%s", line + 11);
         } else if (strncmp(line, "current_port=", 13) == 0) {
             p->current_port = atoi(line + 13);
+        } else if (strncmp(line, "updated=", 8) == 0) {
+            p->updated_ms = (uint64_t)strtoull(line + 8, NULL, 10);
         }
         line = strtok(NULL, "\r\n");
     }
@@ -473,7 +560,13 @@ static void saia_menu_count_report(uint64_t *xui_found, uint64_t *xui_verified,
 
 int saia_print_menu(void) {
     const char *bdr = C_BLUE;
-    const int inner = 74;
+    int term_cols = saia_terminal_columns();
+    int inner = (term_cols - 6) / 2;
+    if (inner < 18) inner = 18;
+    if (inner > 74) inner = 74;
+    int menu_inner = term_cols - 2;
+    if (menu_inner < 28) menu_inner = 28;
+    if (menu_inner > 74) menu_inner = 74;
 
     printf("\x1b[H\x1b[J");
 
@@ -487,6 +580,11 @@ int saia_print_menu(void) {
     saia_menu_runtime_metrics(&ip_count, &tk_count, &ip_lines, last_tk, sizeof(last_tk));
     scan_progress_t pg;
     load_scan_progress(&pg);
+    uint64_t now_ms = (uint64_t)time(NULL) * 1000ULL;
+    long long progress_age = -1;
+    if (pg.updated_ms > 0 && now_ms >= pg.updated_ms) {
+        progress_age = (long long)((now_ms - pg.updated_ms) / 1000ULL);
+    }
 
     char left[8][160];
     char right[8][160];
@@ -502,11 +600,19 @@ int saia_print_menu(void) {
     snprintf(right[0], sizeof(right[0]), "运行细节 %s", saia_menu_spinner(scan_running));
     snprintf(right[1], sizeof(right[1]), "会话: %s | 状态:%s", scan_running ? "saia_scan 运行中" : "未找到", pg.status);
     snprintf(right[2], sizeof(right[2]), "IP段:%zu | 预估IP:%zu | TK:%zu", ip_lines, ip_count, tk_count);
-    snprintf(right[3], sizeof(right[3]), "解析:%zu/%zu 已扫:%llu 命中:%llu", pg.fed, pg.est_total, (unsigned long long)pg.scanned, (unsigned long long)pg.found);
+    snprintf(right[3], sizeof(right[3]), "解析:%zu/%zu | 审计:%llu | 命中:%llu", pg.fed, pg.est_total, (unsigned long long)pg.scanned, (unsigned long long)pg.found);
     snprintf(right[4], sizeof(right[4]), "压背: %s", g_config.backpressure.enabled ? "开" : "关");
-    snprintf(right[5], sizeof(right[5]), "当前目标: %s:%d", pg.current_ip, pg.current_port);
+    if (pg.current_port > 0) {
+        snprintf(right[5], sizeof(right[5]), "审计目标: %s:%d", pg.current_ip, pg.current_port);
+    } else {
+        snprintf(right[5], sizeof(right[5]), "审计目标: %s", pg.current_ip);
+    }
     snprintf(right[6], sizeof(right[6]), "最近命中TK: %s", last_tk);
-    snprintf(right[7], sizeof(right[7]), "每1秒自动刷新，可直接输入菜单号");
+    if (progress_age >= 0) {
+        snprintf(right[7], sizeof(right[7]), "进度更新:%lld秒前 | 每1秒自动刷新", progress_age);
+    } else {
+        snprintf(right[7], sizeof(right[7]), "进度更新:暂无 | 每1秒自动刷新");
+    }
 
     for (int i = 0; i < 8; i++) {
         char fit[160];
@@ -517,32 +623,32 @@ int saia_print_menu(void) {
     }
 
     printf("%s┏", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┓  %s┏", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┓%s\n", C_RESET);
-    printf("%s┃ %-*s ┃  %s┃ %-*s ┃%s\n", bdr, inner - 2, left[0], bdr, inner - 2, right[0], C_RESET);
+    saia_print_dual_panel_line(bdr, left[0], right[0], inner);
     printf("%s┣", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┫  %s┣", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┫%s\n", C_RESET);
     for (int i = 1; i < 8; i++) {
-        printf("%s┃ %-*s ┃  %s┃ %-*s ┃%s\n", bdr, inner - 2, left[i], bdr, inner - 2, right[i], C_RESET);
+        saia_print_dual_panel_line(bdr, left[i], right[i], inner);
     }
     printf("%s┗", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┛  %s┗", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┛%s\n\n", C_RESET);
 
     /* 上边框 */
     printf("%s┏", bdr);
-    for (int i = 0; i < inner; i++) printf("━");
+    for (int i = 0; i < menu_inner; i++) printf("━");
     printf("┓" C_RESET "\n");
 
     /* 标题行 */
     printf("%s┃ %s%s%-*s%s %s┃" C_RESET "\n",
            bdr, C_CYAN, C_BOLD,
-           inner - 2, "SAIA MASTER CONSOLE v" SAIA_VERSION " | 极光控制台",
+           menu_inner - 2, "SAIA MASTER CONSOLE v" SAIA_VERSION " | 极光控制台",
            C_RESET, bdr);
 
     /* 分隔行 */
     printf("%s┣", bdr);
-    for (int i = 0; i < inner; i++) printf("━");
+    for (int i = 0; i < menu_inner; i++) printf("━");
     printf("┫" C_RESET "\n");
 
     /* 运行区标题 */
     printf("%s┃ %s「运行」%-*s%s┃" C_RESET "\n",
-           bdr, C_CYAN, inner - 7, "", bdr);
+           bdr, C_CYAN, menu_inner - 7, "", bdr);
 
     /* 运行区三列菜单 */
     printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
@@ -566,12 +672,12 @@ int saia_print_menu(void) {
 
     /* 分隔行 */
     printf("%s┣", bdr);
-    for (int i = 0; i < inner; i++) printf("━");
+    for (int i = 0; i < menu_inner; i++) printf("━");
     printf("┫" C_RESET "\n");
 
     /* 配置区 */
     printf("%s┃ %s「配置」%-*s%s┃" C_RESET "\n",
-           bdr, C_CYAN, inner - 7, "", bdr);
+           bdr, C_CYAN, menu_inner - 7, "", bdr);
     printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
            bdr,
            C_WHITE, "10. 断点续连",
@@ -581,12 +687,12 @@ int saia_print_menu(void) {
 
     /* 分隔行 */
     printf("%s┣", bdr);
-    for (int i = 0; i < inner; i++) printf("━");
+    for (int i = 0; i < menu_inner; i++) printf("━");
     printf("┫" C_RESET "\n");
 
     /* 数据区 */
     printf("%s┃ %s「数据」%-*s%s┃" C_RESET "\n",
-           bdr, C_CYAN, inner - 7, "", bdr);
+           bdr, C_CYAN, menu_inner - 7, "", bdr);
     printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
            bdr,
            C_WHITE, "13. 更换IP列表",
@@ -608,7 +714,7 @@ int saia_print_menu(void) {
 
     /* 下边框 */
     printf("%s┗", bdr);
-    for (int i = 0; i < inner; i++) printf("━");
+    for (int i = 0; i < menu_inner; i++) printf("━");
     printf("┛" C_RESET "\n");
 
     printf("%s[ 0 ] 退出程序%s   请输入选项(回车刷新): ", C_DIM, C_RESET);
@@ -974,6 +1080,30 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
 
         config_set_default_ports(g_config.mode, &ports, &port_count);
 
+    }
+
+    if (!ports || port_count == 0) {
+        color_red();
+        printf("错误: 端口配置为空，无法启动审计\n");
+        color_reset();
+        for (size_t i = 0; i < raw_node_count; i++) free(raw_nodes[i]);
+        free(raw_nodes);
+        if (creds) free(creds);
+        scanner_cleanup();
+        network_cleanup();
+        return -1;
+    }
+
+    if (g_config.resume_enabled) {
+        char resume_targets[MAX_PATH_LENGTH];
+        snprintf(resume_targets, sizeof(resume_targets), "%s/resume_targets.chk", g_config.base_dir);
+        long long resume_mtime = saia_file_mtime(resume_targets);
+        long long nodes_mtime = saia_file_mtime(used_file ? used_file : g_config.nodes_file);
+        long long tokens_mtime = saia_file_mtime(g_config.tokens_file);
+        if (resume_mtime > 0 && ((nodes_mtime > resume_mtime) || (tokens_mtime > resume_mtime))) {
+            file_remove(resume_targets);
+            printf("%s[断点续连]%s 检测到 IP/TK 已更新，自动清空旧断点目标\n", C_CYAN, C_RESET);
+        }
     }
 
     // 开始扫描

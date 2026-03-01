@@ -1,4 +1,5 @@
 #include "saia.h"
+#include <locale.h>
 
 typedef struct {
     int mode;
@@ -14,6 +15,24 @@ static const char *saia_dash_spinner(int running) {
     if (!running) return "[....]";
     time_t now = time(NULL);
     return frames[(int)(now % 4)];
+}
+
+static size_t saia_dash_utf8_char_len(const unsigned char *p) {
+    if (!p || !*p) return 0;
+    if (*p < 0x80) return 1;
+    if ((*p & 0xE0) == 0xC0 && p[1]) return 2;
+    if ((*p & 0xF0) == 0xE0 && p[1] && p[2]) return 3;
+    if ((*p & 0xF8) == 0xF0 && p[1] && p[2] && p[3]) return 4;
+    return 1;
+}
+
+static int saia_dash_utf8_char_width(const unsigned char *p, size_t len) {
+    if (!p || len == 0) return 0;
+    if (len == 1 && p[0] < 0x80) return 1;
+    if (len == 2) return 1;
+    if (len == 3) return 2;
+    if (len == 4) return 2;
+    return 1;
 }
 
 static int saia_is_scan_session_running(void) {
@@ -80,16 +99,66 @@ static int saia_count_report_stats(const char *report_path,
 static void saia_dash_fit_line(const char *src, char *dst, size_t dst_size, size_t max_len) {
     if (!dst || dst_size == 0) return;
     if (!src) { dst[0] = '\0'; return; }
-    size_t n = strlen(src);
-    if (n <= max_len) {
-        snprintf(dst, dst_size, "%s", src);
-        return;
+    const unsigned char *p = (const unsigned char *)src;
+    size_t out = 0;
+    size_t width = 0;
+    int clipped = 0;
+
+    while (*p && out + 4 < dst_size) {
+        size_t clen = saia_dash_utf8_char_len(p);
+        int cw = saia_dash_utf8_char_width(p, clen);
+        if (width + (size_t)cw > max_len) {
+            clipped = 1;
+            break;
+        }
+        if (out + clen >= dst_size) break;
+        memcpy(dst + out, p, clen);
+        out += clen;
+        width += (size_t)cw;
+        p += clen;
     }
-    if (max_len <= 3) {
-        snprintf(dst, dst_size, "%.*s", (int)max_len, src);
-        return;
+    dst[out] = '\0';
+
+    if (clipped && max_len > 3) {
+        while (out > 0 && width > max_len - 3) {
+            size_t back = 1;
+            while (back < out && ((dst[out - back] & 0xC0) == 0x80)) back++;
+            size_t start = out - back;
+            size_t clen = out - start;
+            int cw = saia_dash_utf8_char_width((const unsigned char *)(dst + start), clen);
+            out = start;
+            width -= (size_t)cw;
+            dst[out] = '\0';
+        }
+        if (out + 3 < dst_size) {
+            memcpy(dst + out, "...", 3);
+            out += 3;
+            dst[out] = '\0';
+        }
     }
-    snprintf(dst, dst_size, "%.*s...", (int)(max_len - 3), src);
+}
+
+static int saia_dash_terminal_columns(void) {
+#ifdef _WIN32
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    if (GetConsoleScreenBufferInfo(GetStdHandle(STD_OUTPUT_HANDLE), &csbi)) {
+        int cols = (int)(csbi.srWindow.Right - csbi.srWindow.Left + 1);
+        if (cols > 0) return cols;
+    }
+#else
+    struct winsize ws;
+    if (ioctl(1, TIOCGWINSZ, &ws) == 0 && ws.ws_col > 0) {
+        return (int)ws.ws_col;
+    }
+#endif
+    {
+        const char *env_cols = getenv("COLUMNS");
+        if (env_cols && *env_cols) {
+            int cols = atoi(env_cols);
+            if (cols > 0) return cols;
+        }
+    }
+    return 120;
 }
 
 static size_t saia_dash_count_file_lines(const char *path) {
@@ -226,6 +295,7 @@ typedef struct {
     int threads;
     char current_ip[64];
     int current_port;
+    uint64_t updated_ms;
 } dash_progress_t;
 
 static void saia_dash_load_progress(dash_progress_t *p) {
@@ -249,6 +319,7 @@ static void saia_dash_load_progress(dash_progress_t *p) {
         else if (strncmp(line, "threads=", 8) == 0) p->threads = atoi(line + 8);
         else if (strncmp(line, "current_ip=", 11) == 0) snprintf(p->current_ip, sizeof(p->current_ip), "%s", line + 11);
         else if (strncmp(line, "current_port=", 13) == 0) p->current_port = atoi(line + 13);
+        else if (strncmp(line, "updated=", 8) == 0) p->updated_ms = (uint64_t)strtoull(line + 8, NULL, 10);
         line = strtok(NULL, "\r\n");
     }
     free(raw);
@@ -1110,7 +1181,10 @@ int saia_realtime_monitor(void) {
                                g_config.scan_mode == 2 ? "探索+验真" :
                                g_config.scan_mode == 3 ? "只留极品" : "未知";
 
-        int inner = 74;
+        int term_cols = saia_dash_terminal_columns();
+        int inner = (term_cols - 6) / 2;
+        if (inner < 26) inner = 26;
+        if (inner > 74) inner = 74;
         const char *bdr = C_BLUE;
         uint64_t xui_found = g_state.xui_found;
         uint64_t xui_verified = g_state.xui_verified;
@@ -1125,6 +1199,11 @@ int saia_realtime_monitor(void) {
         saia_dash_runtime_metrics(&ip_count, &tk_count, &ip_lines, last_tk, sizeof(last_tk));
         dash_progress_t pg;
         saia_dash_load_progress(&pg);
+        uint64_t now_ms = (uint64_t)time(NULL) * 1000ULL;
+        long long progress_age = -1;
+        if (pg.updated_ms > 0 && now_ms >= pg.updated_ms) {
+            progress_age = (long long)((now_ms - pg.updated_ms) / 1000ULL);
+        }
         saia_count_report_stats(g_config.report_file,
                                 &xui_found, &xui_verified,
                                 &s5_found, &s5_verified,
@@ -1144,11 +1223,19 @@ int saia_realtime_monitor(void) {
         snprintf(right[0], sizeof(right[0]), "运行细节 %s", saia_dash_spinner(scan_running));
         snprintf(right[1], sizeof(right[1]), "压背: %s", g_config.backpressure.enabled ? "开" : "关");
         snprintf(right[2], sizeof(right[2]), "CPU: %.1f%% | MEM_FREE: %.0fMB", g_config.backpressure.current_cpu, g_config.backpressure.current_mem);
-        snprintf(right[3], sizeof(right[3]), "解析:%zu/%zu 已扫:%llu 命中:%llu", pg.fed, pg.est_total, (unsigned long long)pg.scanned, (unsigned long long)pg.found);
-        snprintf(right[4], sizeof(right[4]), "当前目标: %s:%d", pg.current_ip, pg.current_port);
+        snprintf(right[3], sizeof(right[3]), "解析:%zu/%zu | 审计:%llu | 命中:%llu", pg.fed, pg.est_total, (unsigned long long)pg.scanned, (unsigned long long)pg.found);
+        if (pg.current_port > 0) {
+            snprintf(right[4], sizeof(right[4]), "审计目标: %s:%d", pg.current_ip, pg.current_port);
+        } else {
+            snprintf(right[4], sizeof(right[4]), "审计目标: %s", pg.current_ip);
+        }
         snprintf(right[5], sizeof(right[5]), "限流: %s", g_config.backpressure.is_throttled ? "是" : "否");
         snprintf(right[6], sizeof(right[6]), "PID:%d | 最近命中TK:%s", (int)g_state.pid, last_tk);
-        snprintf(right[7], sizeof(right[7]), "每2秒刷新，Enter/q返回");
+        if (progress_age >= 0) {
+            snprintf(right[7], sizeof(right[7]), "进度更新:%lld秒前 | 每2秒刷新", progress_age);
+        } else {
+            snprintf(right[7], sizeof(right[7]), "进度更新:暂无 | 每2秒刷新");
+        }
 
         for (int i = 0; i < 8; i++) {
             char fit[180];
@@ -1159,10 +1246,22 @@ int saia_realtime_monitor(void) {
         }
 
         printf("%s┏", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┓  %s┏", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┓%s\n", C_RESET);
-        printf("%s┃ %-*s ┃  %s┃ %-*s ┃%s\n", bdr, inner - 2, left[0], bdr, inner - 2, right[0], C_RESET);
-        printf("%s┣", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┫  %s┣", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┫%s\n", C_RESET);
-        for (int i = 1; i < 8; i++) {
-            printf("%s┃ %-*s ┃  %s┃ %-*s ┃%s\n", bdr, inner - 2, left[i], bdr, inner - 2, right[i], C_RESET);
+        for (int i = 0; i < 8; i++) {
+            int maxw = inner - 2;
+            int lw = visible_width(left[i]);
+            int rw = visible_width(right[i]);
+            int lpad = maxw - lw;
+            int rpad = maxw - rw;
+            if (lpad < 0) lpad = 0;
+            if (rpad < 0) rpad = 0;
+            printf("%s┃ %s", bdr, left[i]);
+            for (int j = 0; j < lpad; j++) putchar(' ');
+            printf(" ┃  %s┃ %s", bdr, right[i]);
+            for (int j = 0; j < rpad; j++) putchar(' ');
+            printf(" ┃%s\n", C_RESET);
+            if (i == 0) {
+                printf("%s┣", bdr); for (int j = 0; j < inner; j++) printf("━"); printf("┫  %s┣", bdr); for (int j = 0; j < inner; j++) printf("━"); printf("┫%s\n", C_RESET);
+            }
         }
         printf("%s┗", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┛  %s┗", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┛%s\n", C_RESET);
 
@@ -1208,6 +1307,27 @@ int saia_realtime_monitor(void) {
 // ==================== 主函数 ====================
 
 int main(int argc, char *argv[]) {
+    setlocale(LC_ALL, "");
+
+    /* 先解析一次启动参数；后续会做 argv 伪装清空 */
+    int cli_run_audit = 0;
+    int cli_mode = 0;
+    int cli_scan_mode = 0;
+    int cli_threads = 0;
+    int cli_port_batch_size = 0;
+
+    if (argc >= 2 && strcmp(argv[1], "--run-audit") == 0) {
+        cli_run_audit = 1;
+        if (argc >= 5) {
+            cli_mode = atoi(argv[2]);
+            cli_scan_mode = atoi(argv[3]);
+            cli_threads = atoi(argv[4]);
+        }
+        if (argc >= 6) {
+            cli_port_batch_size = atoi(argv[5]);
+        }
+    }
+
     // -----------------------------------------------------------------
     // 【终极伪装】系统级进程名称篡改 (必须放在 main 函数的第一步)
     // -----------------------------------------------------------------
@@ -1248,23 +1368,17 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    if (argc >= 2 && strcmp(argv[1], "--run-audit") == 0) {
-        int mode = g_config.mode;
-        int scan_mode = g_config.scan_mode;
-        int threads = g_config.threads;
-
-        if (argc >= 5) {
-            mode = atoi(argv[2]);
-            scan_mode = atoi(argv[3]);
-            threads = atoi(argv[4]);
-        }
+    if (cli_run_audit) {
+        int mode = (cli_mode >= 1 && cli_mode <= 4) ? cli_mode : g_config.mode;
+        int scan_mode = (cli_scan_mode >= 1 && cli_scan_mode <= 3) ? cli_scan_mode : g_config.scan_mode;
+        int threads = (cli_threads > 0) ? cli_threads : g_config.threads;
 
         if (threads < MIN_CONCURRENT_CONNECTIONS) threads = MIN_CONCURRENT_CONNECTIONS;
         if (threads > 300) threads = 300;
 
         int port_batch_size = 5;
-        if (argc >= 6) {
-            port_batch_size = atoi(argv[5]);
+        if (cli_port_batch_size > 0) {
+            port_batch_size = cli_port_batch_size;
         }
         if (port_batch_size < 1) port_batch_size = 1;
         if (port_batch_size > 30) port_batch_size = 30;

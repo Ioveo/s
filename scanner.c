@@ -973,7 +973,12 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
     }
 
     printf("\n扫描结束\n");
-    write_scan_progress(&feed_ctx, (g_running && !g_reload) ? "completed" : "stopped");
+    const char *final_status = (g_running && !g_reload) ? "completed" : "stopped";
+    if (g_running && !g_reload && feed_ctx.est_total > 0 && feed_ctx.fed_count == 0 &&
+        (feed_ctx.skipped_resume > 0 || feed_ctx.skipped_history > 0)) {
+        final_status = "completed_skipped";
+    }
+    write_scan_progress(&feed_ctx, final_status);
 
     if (feed_ctx.skipped_resume > 0 || feed_ctx.skipped_history > 0) {
         printf("跳过统计 -> resume:%d history:%d\n", feed_ctx.skipped_resume, feed_ctx.skipped_history);
