@@ -681,7 +681,7 @@ int saia_print_menu(void) {
     printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
            bdr,
            C_WHITE, "10. 断点续连",
-           C_WHITE, "11. 进料加速",
+           C_WHITE, "11. 压背控制",
            C_HOT,   "12. TG推送配置",
            bdr);
 
@@ -812,16 +812,14 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
 
     // 线程数
 
-    printf("\n并发线程数 [50-300] (默认 200): ");
+    printf("\n并发线程数 [>=1] (默认 200): ");
     fflush(stdout);
     threads = 200;
     if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
         threads = atoi(input);
     }
 
-    if (threads < MIN_CONCURRENT_CONNECTIONS) threads = MIN_CONCURRENT_CONNECTIONS;
-
-    if (threads > 300) threads = 300;
+    if (threads < 1) threads = 1;
 
     printf("\n端口分批大小 [1-30] (默认 5): ");
     fflush(stdout);
@@ -1823,9 +1821,7 @@ int saia_nodes_menu(void) {
             color_reset();
             break;
         case 11:
-            color_yellow();
-            printf("\n>>> [11] 进料加速 (未实现/TODO)\n");
-            color_reset();
+            saia_backpressure_menu();
             break;
         case 12:
             saia_telegram_menu();

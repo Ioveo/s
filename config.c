@@ -216,8 +216,7 @@ int config_load(config_t *cfg, const char *path) {
     node = json_get(root, "threads");
     val = (int)json_get_number(node, -1);
     if (val > 0) {
-        if (val < MIN_CONCURRENT_CONNECTIONS) val = MIN_CONCURRENT_CONNECTIONS;
-        if (val > 300) val = 300;
+        if (val < 1) val = 1;
         cfg->threads = val;
     }
 

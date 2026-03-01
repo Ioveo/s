@@ -582,11 +582,11 @@ int saia_interactive_mode(void) {
                         if (scan_mode >= 1 && scan_mode <= 3) g_config.scan_mode = scan_mode;
                     }
 
-                    printf("并发线程 [50-300] (当前 %d): ", g_config.threads);
+                    printf("并发线程 [>=1] (当前 %d): ", g_config.threads);
                     fflush(stdout);
                     if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
                         int threads = atoi(input);
-                        if (threads >= MIN_CONCURRENT_CONNECTIONS && threads <= 300) {
+                        if (threads >= 1) {
                             g_config.threads = threads;
                         }
                     }
@@ -600,8 +600,7 @@ int saia_interactive_mode(void) {
                         }
                     }
 
-                    if (g_config.threads < MIN_CONCURRENT_CONNECTIONS) g_config.threads = MIN_CONCURRENT_CONNECTIONS;
-                    if (g_config.threads > 300) g_config.threads = 300;
+                    if (g_config.threads < 1) g_config.threads = 1;
 
                     config_save(&g_config, g_config.state_file);
                 }
@@ -769,9 +768,7 @@ int saia_interactive_mode(void) {
                 break;
             }
             case 11:
-                color_yellow();
-                printf("\n>>> [11] 进料加速 (未实现/TODO)\n");
-                color_reset();
+                saia_backpressure_menu();
                 break;
             case 12:
                 saia_telegram_menu();
@@ -1373,8 +1370,7 @@ int main(int argc, char *argv[]) {
         int scan_mode = (cli_scan_mode >= 1 && cli_scan_mode <= 3) ? cli_scan_mode : g_config.scan_mode;
         int threads = (cli_threads > 0) ? cli_threads : g_config.threads;
 
-        if (threads < MIN_CONCURRENT_CONNECTIONS) threads = MIN_CONCURRENT_CONNECTIONS;
-        if (threads > 300) threads = 300;
+        if (threads < 1) threads = 1;
 
         int port_batch_size = 5;
         if (cli_port_batch_size > 0) {

