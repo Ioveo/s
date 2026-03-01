@@ -14,6 +14,7 @@ typedef struct verify_task_s {
     int work_mode;
     int xui_fingerprint_ok;
     int s5_fingerprint_ok;
+    int s5_method;
     struct verify_task_s *next;
 } verify_task_t;
 
@@ -241,6 +242,7 @@ typedef struct {
     int work_mode;
     int xui_fingerprint_ok;
     int s5_fingerprint_ok;
+    int s5_method;
 } worker_arg_t;
 
 static void scanner_report_found_open(const worker_arg_t *task) {
@@ -252,7 +254,13 @@ static void scanner_report_found_open(const worker_arg_t *task) {
     if (task->work_mode == MODE_S5) {
         if (task->s5_fingerprint_ok > 0) {
             tag = "[S5_FOUND]";
-            detail = "端口开放 + S5特征命中";
+            if (task->s5_method == 0x00) {
+                detail = "[节点-可连通] S5-OPEN";
+            } else if (task->s5_method == 0x02) {
+                detail = "[资产-加密节点] S5-AUTH";
+            } else {
+                detail = "端口开放 + S5特征命中";
+            }
         } else {
             tag = "[PORT_OPEN]";
             detail = "端口开放(无S5特征)";
@@ -368,9 +376,10 @@ static int xui_has_required_fingerprint(const char *ip, uint16_t port, int timeo
     return 1;
 }
 
-static int s5_has_required_fingerprint(const char *ip, uint16_t port, int timeout_ms) {
+static int s5_has_required_fingerprint(const char *ip, uint16_t port, int timeout_ms, int *method_out) {
     int fd = socket_create(0);
     if (fd < 0) return 0;
+    if (method_out) *method_out = -1;
 
     struct sockaddr_in addr;
     memset(&addr, 0, sizeof(addr));
@@ -396,7 +405,10 @@ static int s5_has_required_fingerprint(const char *ip, uint16_t port, int timeou
     if (n != 2) return 0;
 
     if ((unsigned char)resp[0] != 0x05) return 0;
-    if ((unsigned char)resp[1] == 0x00 || (unsigned char)resp[1] == 0x02) return 1;
+    if ((unsigned char)resp[1] == 0x00 || (unsigned char)resp[1] == 0x02) {
+        if (method_out) *method_out = (int)(unsigned char)resp[1];
+        return 1;
+    }
     return 0;
 }
 
@@ -405,6 +417,7 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
 
     int xui_fingerprint_ok = task->xui_fingerprint_ok;
     int s5_fingerprint_ok = task->s5_fingerprint_ok;
+    int s5_method = task->s5_method;
     if (xui_fingerprint_ok < 0 &&
         (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY)) {
         xui_fingerprint_ok = xui_has_required_fingerprint(task->ip, task->port, 3000);
@@ -414,6 +427,8 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
         if (s5_fingerprint_ok == 0) {
             return;
         }
+
+        int verified = 0;
         for (size_t i = 0; i < task->cred_count; i++) {
             scanner_set_progress_token(task->ip, task->port, task->creds[i].username, task->creds[i].password);
             if (verify_socks5(task->ip, task->port, task->creds[i].username, task->creds[i].password, 3000)) {
@@ -438,8 +453,27 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
                 snprintf(msg, sizeof(msg), "<b>[S5_VERIFIED] 发现可用节点</b>\n<code>%s:%d:%s:%s</code>",
                          task->ip, task->port, task->creds[i].username, task->creds[i].password);
                 push_telegram(msg);
+                verified = 1;
                 break;
             }
+        }
+
+        if (!verified) {
+            char result_line[1024];
+            if (s5_method == 0x02) {
+                snprintf(result_line, sizeof(result_line),
+                         "[S5_FOUND] [节点-可连通] %s:%d | S5-AUTH | 字典未命中或无L7能力",
+                         task->ip, task->port);
+            } else {
+                snprintf(result_line, sizeof(result_line),
+                         "[S5_FOUND] [节点-可连通] %s:%d | S5-OPEN | 无L7能力",
+                         task->ip, task->port);
+            }
+            MUTEX_LOCK(lock_file);
+            file_append(g_config.report_file, result_line);
+            file_append(g_config.report_file, "\n");
+            printf("\n%s%s%s\n", C_CYAN, result_line, C_RESET);
+            MUTEX_UNLOCK(lock_file);
         }
         return;
     }
@@ -555,6 +589,7 @@ static void scanner_enqueue_verify_task(const worker_arg_t *task) {
     vt->work_mode = task->work_mode;
     vt->xui_fingerprint_ok = task->xui_fingerprint_ok;
     vt->s5_fingerprint_ok = task->s5_fingerprint_ok;
+    vt->s5_method = task->s5_method;
 
     MUTEX_LOCK(lock_stats);
     vt->next = NULL;
@@ -691,8 +726,9 @@ void *worker_thread(void *arg) {
         task->xui_fingerprint_ok = xui_has_required_fingerprint(task->ip, task->port, 2000);
     }
     task->s5_fingerprint_ok = -1;
+    task->s5_method = -1;
     if (task->work_mode == MODE_S5 || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY) {
-        task->s5_fingerprint_ok = s5_has_required_fingerprint(task->ip, task->port, 2000);
+        task->s5_fingerprint_ok = s5_has_required_fingerprint(task->ip, task->port, 2000, &task->s5_method);
     }
     
     // 端口开放，记录发现
@@ -956,6 +992,7 @@ static int feed_single_target(const char *ip, void *userdata) {
         arg->work_mode = g_config.mode;
         arg->xui_fingerprint_ok = -1;
         arg->s5_fingerprint_ok = -1;
+        arg->s5_method = -1;
 
         MUTEX_LOCK(lock_stats);
         running_threads++;
@@ -1168,6 +1205,7 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
             arg->work_mode = g_config.mode;
             arg->xui_fingerprint_ok = -1;
             arg->s5_fingerprint_ok = -1;
+            arg->s5_method = -1;
             
             MUTEX_LOCK(lock_stats);
             running_threads++;
