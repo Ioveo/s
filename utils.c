@@ -106,8 +106,13 @@ char* str_trim(char *str) {
         start++;
     }
 
+    /* 全空白字符串直接返回，避免 end 指针越界 */
+    if (*start == '\0') {
+        return start;
+    }
+
     // 去除尾部空格
-    char *end = str + strlen(str) - 1;
+    char *end = start + strlen(start) - 1;
     while (end > start && isspace((unsigned char)*end)) {
         end--;
     }

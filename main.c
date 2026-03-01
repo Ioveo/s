@@ -933,8 +933,8 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
     }
 
     int count = 0;
-
     int empty_lines = 0;
+    int single_blank_to_end = (file_path && strstr(file_path, "tokens.list") != NULL);
     while (fgets(buffer, sizeof(buffer), stdin)) {
         if (!g_running) break;
 
@@ -963,7 +963,11 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
 
         if (strlen(trimmed) == 0) {
             empty_lines++;
-            if (empty_lines >= 2) break;
+            if (single_blank_to_end) {
+                if (empty_lines >= 1) break;
+            } else {
+                if (empty_lines >= 2) break;
+            }
             continue;
         }
         empty_lines = 0;
@@ -1187,6 +1191,7 @@ int saia_nodes_menu(void) {
             printf("\n>>> [14] 更新 Tokens\n");
             color_reset();
             printf("请粘贴 token/user:pass，支持空格或换行；输入 EOF/END/. 结束:\n");
+            printf("提示: 粘贴完成后，直接回车一个空行也可结束。\n");
             int count = saia_write_list_file_from_input(tokens_path, 1, 0);
             if (count >= 0) {
                 color_green();
