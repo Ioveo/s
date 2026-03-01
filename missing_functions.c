@@ -351,15 +351,24 @@ int saia_interactive_mode(void) {
             case 14: {
                 /* 更新 Tokens/口令 */
                 char tokens_path[MAX_PATH_LENGTH];
+                char mode_input[16];
+                int append_mode = 0;
                 snprintf(tokens_path, sizeof(tokens_path), "%s/tokens.list", g_config.base_dir);
                 color_cyan();
                 printf("\n>>> [14] 更新口令 (tokens.list)\n");
                 color_reset();
+                printf("[1] 覆盖现有\n");
+                printf("[2] 追加到现有\n");
+                printf("请选择 [1/2] (默认1): ");
+                fflush(stdout);
+                if (fgets(mode_input, sizeof(mode_input), stdin) && mode_input[0] == '2') {
+                    append_mode = 1;
+                }
                 printf("请粘贴 token/user:pass，支持空格或换行；输入 EOF/END/. 结束:\n");
-                int count = saia_write_list_file_from_input(tokens_path, 1, 0);
+                int count = saia_write_list_file_from_input(tokens_path, 1, append_mode);
                 if (count >= 0) {
                     color_green();
-                    printf(">>> 口令已更新，本次写入 %d 条\n\n", count);
+                    printf(">>> 口令已%s，本次写入 %d 条\n\n", append_mode ? "追加" : "覆盖", count);
                     color_reset();
                 } else {
                     color_red();
