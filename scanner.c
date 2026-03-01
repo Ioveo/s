@@ -427,6 +427,7 @@ static size_t g_scan_q_head = 0;
 static size_t g_scan_q_tail = 0;
 static size_t g_scan_q_size = 0;
 static volatile int g_scan_producer_done = 0;
+static int g_scan_worker_total = 0;
 
 static worker_arg_t *worker_arg_acquire(void) {
     worker_arg_t *out = NULL;
@@ -472,6 +473,7 @@ static void scan_queue_reset(void) {
     g_scan_q_tail = 0;
     g_scan_q_size = 0;
     g_scan_producer_done = 0;
+    g_scan_worker_total = 0;
     MUTEX_UNLOCK(lock_stats);
 }
 
@@ -1079,6 +1081,9 @@ static void write_scan_progress(feed_context_t *ctx, const char *status) {
     uint64_t scanned = g_state.total_scanned;
     uint64_t found = g_state.total_found;
     int threads_now = running_threads;
+    size_t queue_now = g_scan_q_size;
+    int producer_done = g_scan_producer_done;
+    int worker_total = g_scan_worker_total;
     char tk_line[512];
     snprintf(tk_line, sizeof(tk_line), "%s", progress_token[0] ? progress_token : "-");
     MUTEX_UNLOCK(lock_stats);
@@ -1091,6 +1096,12 @@ static void write_scan_progress(feed_context_t *ctx, const char *status) {
              "found=%llu\n"
              "audit_ips=%zu\n"
              "threads=%d\n"
+             "run_mode=%d\n"
+             "run_scan_mode=%d\n"
+             "run_threads_cfg=%d\n"
+             "queue_size=%zu\n"
+             "producer_done=%d\n"
+             "worker_total=%d\n"
              "current_token=%s\n"
              "current_ip=%s\n"
              "current_port=%u\n"
@@ -1102,6 +1113,12 @@ static void write_scan_progress(feed_context_t *ctx, const char *status) {
              (unsigned long long)found,
              ctx->fed_count,
              threads_now,
+             g_state.mode,
+             g_state.work_mode,
+             g_state.threads,
+             queue_now,
+             producer_done,
+             worker_total,
              tk_line,
              ctx->current_ip[0] ? ctx->current_ip : "-",
              (unsigned)ctx->current_port,
@@ -1281,8 +1298,12 @@ static int feed_single_target(const char *ip, void *userdata) {
         }
     }
 
-    if (g_config.feed_interval > 0.0f) {
-        int ms = (int)(g_config.feed_interval * 1000.0f);
+    float eff_interval = g_config.feed_interval;
+    if (g_state.threads >= 500 && eff_interval > 0.002f) {
+        eff_interval = 0.0f;
+    }
+    if (eff_interval > 0.0f) {
+        int ms = (int)(eff_interval * 1000.0f);
         if (ms < 1) ms = 1;
         saia_sleep(ms);
     }
@@ -1714,6 +1735,9 @@ void scanner_start_streaming(const char *targets_file,
     if (worker_count > 4096) worker_count = 4096;
     worker_arg_pool_prefill(SCAN_TASK_QUEUE_CAP + worker_count + 64);
     scan_queue_reset();
+    MUTEX_LOCK(lock_stats);
+    g_scan_worker_total = (int)worker_count;
+    MUTEX_UNLOCK(lock_stats);
 
     stream_producer_ctx_t pctx;
     pctx.targets_file = targets_file;

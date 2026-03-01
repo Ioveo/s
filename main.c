@@ -492,6 +492,12 @@ typedef struct {
     uint64_t scanned;
     uint64_t found;
     int threads;
+    int run_mode;
+    int run_scan_mode;
+    int run_threads_cfg;
+    size_t queue_size;
+    int producer_done;
+    int worker_total;
     char current_token[512];
     char current_ip[64];
     int current_port;
@@ -527,6 +533,18 @@ static void load_scan_progress(scan_progress_t *p) {
             p->found = (uint64_t)strtoull(line + 6, NULL, 10);
         } else if (strncmp(line, "threads=", 8) == 0) {
             p->threads = atoi(line + 8);
+        } else if (strncmp(line, "run_mode=", 9) == 0) {
+            p->run_mode = atoi(line + 9);
+        } else if (strncmp(line, "run_scan_mode=", 14) == 0) {
+            p->run_scan_mode = atoi(line + 14);
+        } else if (strncmp(line, "run_threads_cfg=", 16) == 0) {
+            p->run_threads_cfg = atoi(line + 16);
+        } else if (strncmp(line, "queue_size=", 11) == 0) {
+            p->queue_size = (size_t)strtoull(line + 11, NULL, 10);
+        } else if (strncmp(line, "producer_done=", 14) == 0) {
+            p->producer_done = atoi(line + 14);
+        } else if (strncmp(line, "worker_total=", 13) == 0) {
+            p->worker_total = atoi(line + 13);
         } else if (strncmp(line, "current_token=", 14) == 0) {
             snprintf(p->current_token, sizeof(p->current_token), "%s", line + 14);
         } else if (strncmp(line, "current_ip=", 11) == 0) {
@@ -588,23 +606,26 @@ int saia_print_menu(void) {
     scan_progress_t pg;
     load_scan_progress(&pg);
     if (pg.audit_ips == 0) pg.audit_ips = pg.fed;
+    int show_mode = (pg.run_mode >= 1 && pg.run_mode <= 4) ? pg.run_mode : g_config.mode;
+    int show_scan_mode = (pg.run_scan_mode >= 1 && pg.run_scan_mode <= 3) ? pg.run_scan_mode : g_config.scan_mode;
+    int show_threads_cfg = (pg.run_threads_cfg > 0) ? pg.run_threads_cfg : g_config.threads;
 
     char left[8][160];
     char right[8][160];
     snprintf(left[0], sizeof(left[0]), "SAIA MASTER CONSOLE v%s %s", SAIA_VERSION, saia_menu_spinner(scan_running));
     snprintf(left[1], sizeof(left[1]), "审计:%s | 断点:%s | TG:%s", scan_running ? "运行中" : "已停止", g_config.resume_enabled ? "开" : "关", g_config.telegram_enabled ? "开" : "关");
-    snprintf(left[2], sizeof(left[2]), "模式:%d | 策略:%d | 线程设定:%d", g_config.mode, g_config.scan_mode, g_config.threads);
+    snprintf(left[2], sizeof(left[2]), "模式:%d | 策略:%d | 线程设定:%d", show_mode, show_scan_mode, show_threads_cfg);
     snprintf(left[3], sizeof(left[3]), "总发现:%llu | 总验真:%llu", (unsigned long long)total_found, (unsigned long long)total_verified);
     snprintf(left[4], sizeof(left[4]), "XUI 发现/验真:%llu/%llu", (unsigned long long)xui_found, (unsigned long long)xui_verified);
     snprintf(left[5], sizeof(left[5]), "S5  发现/验真:%llu/%llu", (unsigned long long)s5_found, (unsigned long long)s5_verified);
     snprintf(left[6], sizeof(left[6]), "CPU: %.1f%% | MEM_FREE: %.0fMB", g_config.backpressure.current_cpu, g_config.backpressure.current_mem);
-    snprintf(left[7], sizeof(left[7]), "状态:%s | 在跑线程:%d", scan_running ? "运行中" : "空闲", pg.threads);
+    snprintf(left[7], sizeof(left[7]), "状态:%s | 在跑:%d/%d", scan_running ? "运行中" : "空闲", pg.threads, pg.worker_total > 0 ? pg.worker_total : show_threads_cfg);
 
     snprintf(right[0], sizeof(right[0]), "运行细节 %s", saia_menu_spinner(scan_running));
     snprintf(right[1], sizeof(right[1]), "会话: %s | 状态:%s", scan_running ? "saia_scan 运行中" : "未找到", pg.status);
     snprintf(right[2], sizeof(right[2]), "IP段:%zu | 预估IP:%zu | TK:%zu", ip_lines, ip_count, tk_count);
     snprintf(right[3], sizeof(right[3]), "解析:%zu/%zu | 审计IP:%zu | 命中:%llu", pg.fed, pg.est_total, pg.audit_ips, (unsigned long long)pg.found);
-    snprintf(right[4], sizeof(right[4]), "压背: %s", g_config.backpressure.enabled ? "开" : "关");
+    snprintf(right[4], sizeof(right[4]), "压背:%s | 队列:%zu | 生产:%s", g_config.backpressure.enabled ? "开" : "关", pg.queue_size, pg.producer_done ? "完成" : "进行中");
     if (pg.current_port > 0) {
         snprintf(right[5], sizeof(right[5]), "审计目标: %s:%d", pg.current_ip, pg.current_port);
     } else {

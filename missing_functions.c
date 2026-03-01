@@ -294,6 +294,12 @@ typedef struct {
     uint64_t scanned;
     uint64_t found;
     int threads;
+    int run_mode;
+    int run_scan_mode;
+    int run_threads_cfg;
+    size_t queue_size;
+    int producer_done;
+    int worker_total;
     char current_token[512];
     char current_ip[64];
     int current_port;
@@ -321,6 +327,12 @@ static void saia_dash_load_progress(dash_progress_t *p) {
         else if (strncmp(line, "scanned=", 8) == 0) p->scanned = (uint64_t)strtoull(line + 8, NULL, 10);
         else if (strncmp(line, "found=", 6) == 0) p->found = (uint64_t)strtoull(line + 6, NULL, 10);
         else if (strncmp(line, "threads=", 8) == 0) p->threads = atoi(line + 8);
+        else if (strncmp(line, "run_mode=", 9) == 0) p->run_mode = atoi(line + 9);
+        else if (strncmp(line, "run_scan_mode=", 14) == 0) p->run_scan_mode = atoi(line + 14);
+        else if (strncmp(line, "run_threads_cfg=", 16) == 0) p->run_threads_cfg = atoi(line + 16);
+        else if (strncmp(line, "queue_size=", 11) == 0) p->queue_size = (size_t)strtoull(line + 11, NULL, 10);
+        else if (strncmp(line, "producer_done=", 14) == 0) p->producer_done = atoi(line + 14);
+        else if (strncmp(line, "worker_total=", 13) == 0) p->worker_total = atoi(line + 13);
         else if (strncmp(line, "current_token=", 14) == 0) snprintf(p->current_token, sizeof(p->current_token), "%s", line + 14);
         else if (strncmp(line, "current_ip=", 11) == 0) snprintf(p->current_ip, sizeof(p->current_ip), "%s", line + 11);
         else if (strncmp(line, "current_port=", 13) == 0) p->current_port = atoi(line + 13);
@@ -1230,14 +1242,6 @@ int saia_realtime_monitor(void) {
 
         int scan_running = saia_is_scan_session_running();
         const char *status_str = scan_running ? "running" : (g_state.status[0] ? g_state.status : "idle");
-        const char *mode_str = g_config.mode == 1 ? "XUI专项" :
-                               g_config.mode == 2 ? "S5专项" :
-                               g_config.mode == 3 ? "深度全能" :
-                               g_config.mode == 4 ? "验真模式" : "未知";
-        const char *scan_str = g_config.scan_mode == 1 ? "探索" :
-                               g_config.scan_mode == 2 ? "探索+验真" :
-                               g_config.scan_mode == 3 ? "只留极品" : "未知";
-
         int term_cols = saia_dash_terminal_columns();
         int inner = (term_cols - 6) / 2;
         if (inner < 26) inner = 26;
@@ -1257,6 +1261,16 @@ int saia_realtime_monitor(void) {
         dash_progress_t pg;
         saia_dash_load_progress(&pg);
         if (pg.audit_ips == 0) pg.audit_ips = pg.fed;
+        int show_mode_num = (pg.run_mode >= 1 && pg.run_mode <= 4) ? pg.run_mode : g_config.mode;
+        int show_scan_num = (pg.run_scan_mode >= 1 && pg.run_scan_mode <= 3) ? pg.run_scan_mode : g_config.scan_mode;
+        int show_threads_cfg = (pg.run_threads_cfg > 0) ? pg.run_threads_cfg : g_config.threads;
+        const char *show_mode_str = show_mode_num == 1 ? "XUI专项" :
+                                    show_mode_num == 2 ? "S5专项" :
+                                    show_mode_num == 3 ? "深度全能" :
+                                    show_mode_num == 4 ? "验真模式" : "未知";
+        const char *show_scan_str = show_scan_num == 1 ? "探索" :
+                                    show_scan_num == 2 ? "探索+验真" :
+                                    show_scan_num == 3 ? "只留极品" : "未知";
         saia_count_report_stats(g_config.report_file,
                                 &xui_found, &xui_verified,
                                 &s5_found, &s5_verified,
@@ -1265,16 +1279,16 @@ int saia_realtime_monitor(void) {
         char left[8][180];
         char right[8][180];
         snprintf(left[0], sizeof(left[0]), "SAIA MONITOR v%s %s", SAIA_VERSION, saia_dash_spinner(scan_running));
-        snprintf(left[1], sizeof(left[1]), "状态:%s | 模式:%s", status_str, mode_str);
-        snprintf(left[2], sizeof(left[2]), "策略:%s | 运行:%02d:%02d:%02d", scan_str, hours, mins, secs);
+        snprintf(left[1], sizeof(left[1]), "状态:%s | 模式:%s", status_str, show_mode_str);
+        snprintf(left[2], sizeof(left[2]), "策略:%s | 运行:%02d:%02d:%02d", show_scan_str, hours, mins, secs);
         snprintf(left[3], sizeof(left[3]), "总发现:%llu | 总验真:%llu", (unsigned long long)total_found, (unsigned long long)total_verified);
         snprintf(left[4], sizeof(left[4]), "XUI 发现/验真:%llu/%llu", (unsigned long long)xui_found, (unsigned long long)xui_verified);
         snprintf(left[5], sizeof(left[5]), "S5  发现/验真:%llu/%llu", (unsigned long long)s5_found, (unsigned long long)s5_verified);
-        snprintf(left[6], sizeof(left[6]), "线程设定:%d | 在跑:%d", g_config.threads, pg.threads);
+        snprintf(left[6], sizeof(left[6]), "线程设定:%d | 在跑:%d/%d", show_threads_cfg, pg.threads, pg.worker_total > 0 ? pg.worker_total : show_threads_cfg);
         snprintf(left[7], sizeof(left[7]), "IP段:%zu | 预估IP:%zu | TK:%zu", ip_lines, ip_count, tk_count);
 
         snprintf(right[0], sizeof(right[0]), "运行细节 %s", saia_dash_spinner(scan_running));
-        snprintf(right[1], sizeof(right[1]), "压背: %s", g_config.backpressure.enabled ? "开" : "关");
+        snprintf(right[1], sizeof(right[1]), "压背:%s | 队列:%zu | 生产:%s", g_config.backpressure.enabled ? "开" : "关", pg.queue_size, pg.producer_done ? "完成" : "进行中");
         snprintf(right[2], sizeof(right[2]), "CPU: %.1f%% | MEM_FREE: %.0fMB", g_config.backpressure.current_cpu, g_config.backpressure.current_mem);
         snprintf(right[3], sizeof(right[3]), "解析:%zu/%zu | 审计IP:%zu | 命中:%llu", pg.fed, pg.est_total, pg.audit_ips, (unsigned long long)pg.found);
         if (pg.current_port > 0) {
