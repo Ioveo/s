@@ -421,6 +421,13 @@ static worker_arg_pool_t *g_worker_arg_pool = NULL;
 static int g_worker_arg_pool_size = 0;
 #define WORKER_ARG_POOL_MAX 16384
 
+#define SCAN_TASK_QUEUE_CAP 10000
+static worker_arg_t *g_scan_task_queue[SCAN_TASK_QUEUE_CAP];
+static size_t g_scan_q_head = 0;
+static size_t g_scan_q_tail = 0;
+static size_t g_scan_q_size = 0;
+static volatile int g_scan_producer_done = 0;
+
 static worker_arg_t *worker_arg_acquire(void) {
     worker_arg_t *out = NULL;
     MUTEX_LOCK(lock_stats);
@@ -457,6 +464,67 @@ static void worker_arg_release(worker_arg_t *arg) {
     MUTEX_UNLOCK(lock_stats);
 
     free(node);
+}
+
+static void scan_queue_reset(void) {
+    MUTEX_LOCK(lock_stats);
+    g_scan_q_head = 0;
+    g_scan_q_tail = 0;
+    g_scan_q_size = 0;
+    g_scan_producer_done = 0;
+    MUTEX_UNLOCK(lock_stats);
+}
+
+static void worker_arg_pool_prefill(size_t target_count) {
+    if (target_count > WORKER_ARG_POOL_MAX) target_count = WORKER_ARG_POOL_MAX;
+    while (1) {
+        MUTEX_LOCK(lock_stats);
+        int cur = g_worker_arg_pool_size;
+        MUTEX_UNLOCK(lock_stats);
+        if ((size_t)cur >= target_count) break;
+
+        worker_arg_pool_t *n = (worker_arg_pool_t *)calloc(1, sizeof(worker_arg_pool_t));
+        if (!n) break;
+
+        MUTEX_LOCK(lock_stats);
+        n->next = g_worker_arg_pool;
+        g_worker_arg_pool = n;
+        g_worker_arg_pool_size++;
+        MUTEX_UNLOCK(lock_stats);
+    }
+}
+
+static int scan_queue_push(worker_arg_t *task) {
+    int ok = 0;
+    MUTEX_LOCK(lock_stats);
+    if (g_scan_q_size < SCAN_TASK_QUEUE_CAP) {
+        g_scan_task_queue[g_scan_q_tail] = task;
+        g_scan_q_tail = (g_scan_q_tail + 1) % SCAN_TASK_QUEUE_CAP;
+        g_scan_q_size++;
+        ok = 1;
+    }
+    MUTEX_UNLOCK(lock_stats);
+    return ok;
+}
+
+static worker_arg_t *scan_queue_pop(void) {
+    worker_arg_t *task = NULL;
+    MUTEX_LOCK(lock_stats);
+    if (g_scan_q_size > 0) {
+        task = g_scan_task_queue[g_scan_q_head];
+        g_scan_q_head = (g_scan_q_head + 1) % SCAN_TASK_QUEUE_CAP;
+        g_scan_q_size--;
+    }
+    MUTEX_UNLOCK(lock_stats);
+    return task;
+}
+
+static size_t scan_queue_size(void) {
+    size_t n;
+    MUTEX_LOCK(lock_stats);
+    n = g_scan_q_size;
+    MUTEX_UNLOCK(lock_stats);
+    return n;
 }
 
 static void scanner_report_found_open(const worker_arg_t *task) {
@@ -1160,40 +1228,34 @@ static int feed_single_target(const char *ip, void *userdata) {
                 }
             }
 
-            MUTEX_LOCK(lock_stats);
-            int cur = running_threads + verify_running_threads;
-            MUTEX_UNLOCK(lock_stats);
-            if (cur < clamp_positive_threads(g_config.threads)) break;
-            saia_sleep(5);
+            if (scan_queue_size() < SCAN_TASK_QUEUE_CAP) break;
+            saia_sleep(2);
         }
         if (!g_running || g_reload) break;
 
-        worker_arg_t *arg = worker_arg_acquire();
-        if (!arg) continue;
-        strncpy(arg->ip, ip, sizeof(arg->ip) - 1);
-        arg->ip[sizeof(arg->ip) - 1] = '\0';
-        arg->port = ctx->ports[p];
-        arg->creds = ctx->creds;
-        arg->cred_count = ctx->cred_count;
-        arg->work_mode = g_config.mode;
-        arg->xui_fingerprint_ok = -1;
-        arg->s5_fingerprint_ok = -1;
-        arg->s5_method = -1;
+        while (g_running && !g_reload) {
+            worker_arg_t *arg = worker_arg_acquire();
+            if (!arg) {
+                saia_sleep(1);
+                continue;
+            }
 
-        MUTEX_LOCK(lock_stats);
-        running_threads++;
-        MUTEX_UNLOCK(lock_stats);
+            strncpy(arg->ip, ip, sizeof(arg->ip) - 1);
+            arg->ip[sizeof(arg->ip) - 1] = '\0';
+            arg->port = ctx->ports[p];
+            arg->creds = ctx->creds;
+            arg->cred_count = ctx->cred_count;
+            arg->work_mode = g_config.mode;
+            arg->xui_fingerprint_ok = -1;
+            arg->s5_fingerprint_ok = -1;
+            arg->s5_method = -1;
 
-#ifdef _WIN32
-        _beginthreadex(NULL, 0, worker_thread, arg, 0, NULL);
-#else
-        pthread_t tid;
-        pthread_create(&tid, NULL, worker_thread, arg);
-        pthread_detach(tid);
-#endif
-
-        if ((running_threads % 10) == 0) {
-            saia_sleep(5);
+            if (!scan_queue_push(arg)) {
+                worker_arg_release(arg);
+                saia_sleep(1);
+                continue;
+            }
+            break;
         }
     }
 
@@ -1469,6 +1531,95 @@ static size_t scanner_estimate_targets_from_file(const char *targets_file) {
     return est_total;
 }
 
+typedef struct {
+    const char *targets_file;
+    feed_context_t *ctx;
+} stream_producer_ctx_t;
+
+#ifdef _WIN32
+static unsigned __stdcall scanner_stream_worker(void *arg) {
+#else
+static void *scanner_stream_worker(void *arg) {
+#endif
+    (void)arg;
+    while (g_running && !g_reload) {
+        worker_arg_t *task = scan_queue_pop();
+        if (!task) {
+            if (g_scan_producer_done) break;
+            saia_sleep(2);
+            continue;
+        }
+
+        MUTEX_LOCK(lock_stats);
+        running_threads++;
+        MUTEX_UNLOCK(lock_stats);
+
+        worker_thread(task);
+    }
+#ifdef _WIN32
+    return 0;
+#else
+    return NULL;
+#endif
+}
+
+#ifdef _WIN32
+static unsigned __stdcall scanner_stream_producer(void *arg) {
+#else
+static void *scanner_stream_producer(void *arg) {
+#endif
+    stream_producer_ctx_t *pctx = (stream_producer_ctx_t *)arg;
+    if (!pctx || !pctx->targets_file || !pctx->ctx) {
+        MUTEX_LOCK(lock_stats);
+        g_scan_producer_done = 1;
+        MUTEX_UNLOCK(lock_stats);
+#ifdef _WIN32
+        return 0;
+#else
+        return NULL;
+#endif
+    }
+
+    FILE *fp = fopen(pctx->targets_file, "rb");
+    if (!fp) {
+        printf("[错误] 无法打开目标文件: %s\n", pctx->targets_file);
+        MUTEX_LOCK(lock_stats);
+        g_scan_producer_done = 1;
+        MUTEX_UNLOCK(lock_stats);
+#ifdef _WIN32
+        return 0;
+#else
+        return NULL;
+#endif
+    }
+
+    char line[4096];
+    while (g_running && !g_reload && fgets(line, sizeof(line), fp)) {
+        if (!line[0] || line[0] == '#') continue;
+        char line_copy[4096];
+        strncpy(line_copy, line, sizeof(line_copy) - 1);
+        line_copy[sizeof(line_copy) - 1] = '\0';
+        char *saveptr = NULL;
+        for (char *tok = SAIA_STRTOK_R(line_copy, " \t\r\n", &saveptr);
+             tok && g_running && !g_reload;
+             tok = SAIA_STRTOK_R(NULL, " \t\r\n", &saveptr)) {
+            if (*tok == '#') break;
+            if (iterate_expanded_targets(tok, feed_single_target, pctx->ctx) != 0) break;
+        }
+    }
+    fclose(fp);
+
+    MUTEX_LOCK(lock_stats);
+    g_scan_producer_done = 1;
+    MUTEX_UNLOCK(lock_stats);
+
+#ifdef _WIN32
+    return 0;
+#else
+    return NULL;
+#endif
+}
+
 /*
  * scanner_start_streaming: 流式扫描 — 直接读取目标文件，按行渐进展开并投喂。
  */
@@ -1559,31 +1710,77 @@ void scanner_start_streaming(const char *targets_file,
     /* skip caches are preloaded once per audit session */
     write_scan_progress(&feed_ctx, "running");
 
-    FILE *fp = fopen(targets_file, "rb");
-    if (!fp) {
-        printf("[错误] 无法打开目标文件: %s\n", targets_file);
-        MUTEX_LOCK(lock_stats);
-        feeding_in_progress = 0;
-        MUTEX_UNLOCK(lock_stats);
-        write_scan_progress(&feed_ctx, "stopped");
-        return;
+    size_t worker_count = (size_t)clamp_positive_threads(g_config.threads);
+    if (worker_count > 4096) worker_count = 4096;
+    worker_arg_pool_prefill(SCAN_TASK_QUEUE_CAP + worker_count + 64);
+    scan_queue_reset();
+
+    stream_producer_ctx_t pctx;
+    pctx.targets_file = targets_file;
+    pctx.ctx = &feed_ctx;
+
+#ifdef _WIN32
+    HANDLE *worker_handles = (HANDLE *)calloc(worker_count, sizeof(HANDLE));
+    size_t worker_started = 0;
+    for (size_t i = 0; i < worker_count; i++) {
+        uintptr_t h = _beginthreadex(NULL, 0, scanner_stream_worker, NULL, 0, NULL);
+        if (h == 0) break;
+        worker_handles[worker_started++] = (HANDLE)h;
+        if ((worker_started % 20) == 0) saia_sleep(5);
     }
 
-    char line[4096];
-    while (g_running && !g_reload && fgets(line, sizeof(line), fp)) {
-        if (!line[0] || line[0] == '#') continue;
-        char line_copy[4096];
-        strncpy(line_copy, line, sizeof(line_copy) - 1);
-        line_copy[sizeof(line_copy) - 1] = '\0';
-        char *saveptr = NULL;
-        for (char *tok = SAIA_STRTOK_R(line_copy, " \t\r\n", &saveptr);
-             tok && g_running && !g_reload;
-             tok = SAIA_STRTOK_R(NULL, " \t\r\n", &saveptr)) {
-            if (*tok == '#') break;
-            if (iterate_expanded_targets(tok, feed_single_target, &feed_ctx) != 0) break;
+    if (worker_started == 0) {
+        printf("[错误] 未能创建扫描工作线程\n");
+        MUTEX_LOCK(lock_stats);
+        g_scan_producer_done = 1;
+        MUTEX_UNLOCK(lock_stats);
+    } else {
+        uintptr_t producer_h = _beginthreadex(NULL, 0, scanner_stream_producer, &pctx, 0, NULL);
+        if (producer_h != 0) {
+            WaitForSingleObject((HANDLE)producer_h, INFINITE);
+            CloseHandle((HANDLE)producer_h);
+        } else {
+            MUTEX_LOCK(lock_stats);
+            g_scan_producer_done = 1;
+            MUTEX_UNLOCK(lock_stats);
         }
     }
-    fclose(fp);
+
+    for (size_t i = 0; i < worker_started; i++) {
+        WaitForSingleObject(worker_handles[i], INFINITE);
+        CloseHandle(worker_handles[i]);
+    }
+    free(worker_handles);
+#else
+    pthread_t *workers = (pthread_t *)calloc(worker_count, sizeof(pthread_t));
+    size_t worker_started = 0;
+    for (size_t i = 0; i < worker_count; i++) {
+        if (pthread_create(&workers[i], NULL, scanner_stream_worker, NULL) != 0) break;
+        worker_started++;
+        if ((worker_started % 20) == 0) saia_sleep(5);
+    }
+
+    if (worker_started == 0) {
+        printf("[错误] 未能创建扫描工作线程\n");
+        MUTEX_LOCK(lock_stats);
+        g_scan_producer_done = 1;
+        MUTEX_UNLOCK(lock_stats);
+    } else {
+        pthread_t producer_tid;
+        if (pthread_create(&producer_tid, NULL, scanner_stream_producer, &pctx) == 0) {
+            pthread_join(producer_tid, NULL);
+        } else {
+            MUTEX_LOCK(lock_stats);
+            g_scan_producer_done = 1;
+            MUTEX_UNLOCK(lock_stats);
+        }
+    }
+
+    for (size_t i = 0; i < worker_started; i++) {
+        pthread_join(workers[i], NULL);
+    }
+    free(workers);
+#endif
 
     MUTEX_LOCK(lock_stats);
     feeding_in_progress = 0;
@@ -1638,6 +1835,8 @@ void scanner_cleanup(void) {
         g_worker_arg_pool = next;
     }
     g_worker_arg_pool_size = 0;
+    g_scan_q_head = g_scan_q_tail = g_scan_q_size = 0;
+    g_scan_producer_done = 0;
 
     target_set_free(&g_resume_cache);
     target_set_free(&g_history_cache);

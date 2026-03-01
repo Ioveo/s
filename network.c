@@ -168,20 +168,29 @@ int socket_connect_timeout(int fd, const struct sockaddr *addr, socklen_t addrle
 
 int socket_send_all(int fd, const char *data, size_t len, int timeout_ms) {
     if (fd < 0 || !data || len == 0) return -1;
-    
-    fd_set write_fds;
-    FD_ZERO(&write_fds);
-    FD_SET(fd, &write_fds);
-    
-    struct timeval tv;
-    tv.tv_sec = timeout_ms / 1000;
-    tv.tv_usec = (timeout_ms % 1000) * 1000;
-    
-    if (select(fd + 1, NULL, &write_fds, NULL, &tv) <= 0) {
-        return -1;
+
+    size_t sent_total = 0;
+    while (sent_total < len) {
+        fd_set write_fds;
+        FD_ZERO(&write_fds);
+        FD_SET(fd, &write_fds);
+
+        struct timeval tv;
+        tv.tv_sec = timeout_ms / 1000;
+        tv.tv_usec = (timeout_ms % 1000) * 1000;
+
+        if (select(fd + 1, NULL, &write_fds, NULL, &tv) <= 0) {
+            return -1;
+        }
+
+        int n = send(fd, data + sent_total, len - sent_total, 0);
+        if (n <= 0) {
+            return -1;
+        }
+        sent_total += (size_t)n;
     }
-    
-    return send(fd, data, len, 0);
+
+    return 0;
 }
 
 int socket_recv_until(int fd, char *buf, size_t size, const char *delimiter, int timeout_ms) {
