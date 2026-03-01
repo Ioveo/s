@@ -1847,6 +1847,7 @@ int saia_nodes_menu(void) {
         case 14: {
             char tokens_path[MAX_PATH_LENGTH];
             char mode_input[16];
+            char next_input[16];
             int append_mode = 0;
             snprintf(tokens_path, sizeof(tokens_path), "%s/tokens.list", g_config.base_dir);
             color_cyan();
@@ -1859,17 +1860,36 @@ int saia_nodes_menu(void) {
             if (fgets(mode_input, sizeof(mode_input), stdin) && mode_input[0] == '2') {
                 append_mode = 1;
             }
-            printf("请粘贴 token/user:pass（可多行/多次粘贴），完成后输入 EOF 结束。\n");
-            int count = saia_write_list_file_from_input(tokens_path, 1, append_mode);
-            if (count >= 0) {
-                color_green();
-                printf(">>> Tokens 已%s，本次写入 %d 条\n\n", append_mode ? "追加" : "覆盖", count);
-                color_reset();
-                saia_print_tokens_write_summary(tokens_path, append_mode, count);
-            } else {
-                color_red();
-                printf(">>> 写入失败或已取消\n");
-                color_reset();
+
+            while (g_running) {
+                printf("请粘贴 token/user:pass（可多行/多次粘贴），完成后输入 EOF 结束。\n");
+                int count = saia_write_list_file_from_input(tokens_path, 1, append_mode);
+                if (count >= 0) {
+                    color_green();
+                    printf(">>> Tokens 已%s，本次写入 %d 条\n\n", append_mode ? "追加" : "覆盖", count);
+                    color_reset();
+                    saia_print_tokens_write_summary(tokens_path, append_mode, count);
+                } else {
+                    color_red();
+                    printf(">>> 写入失败或已取消\n");
+                    color_reset();
+                }
+
+                printf("[1] 继续追加\n");
+                printf("[2] 继续覆盖\n");
+                printf("[0] 返回\n");
+                printf("选择: ");
+                fflush(stdout);
+                if (!fgets(next_input, sizeof(next_input), stdin)) break;
+                if (next_input[0] == '1') {
+                    append_mode = 1;
+                    continue;
+                }
+                if (next_input[0] == '2') {
+                    append_mode = 0;
+                    continue;
+                }
+                break;
             }
             break;
         }
