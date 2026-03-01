@@ -408,10 +408,8 @@ typedef struct {
     size_t port_count;
     size_t fed_count;
     size_t est_total;
-    char **resume_done;
-    size_t resume_done_count;
-    char **history_done;
-    size_t history_done_count;
+    struct target_set_s *resume_done;
+    struct target_set_s *history_done;
     int skipped_resume;
     int skipped_history;
     int enable_resume_skip;
@@ -420,35 +418,85 @@ typedef struct {
     char history_file[MAX_PATH_LENGTH];
 } feed_context_t;
 
-static int target_list_contains(char **list, size_t count, const char *target) {
-    if (!list || !target || !*target) return 0;
-    for (size_t i = 0; i < count; i++) {
-        if (list[i] && strcmp(list[i], target) == 0) return 1;
+typedef struct target_node_s {
+    char *key;
+    struct target_node_s *next;
+} target_node_t;
+
+typedef struct target_set_s {
+    target_node_t **buckets;
+    size_t bucket_count;
+    size_t size;
+} target_set_t;
+
+static uint32_t target_hash(const char *s) {
+    uint32_t h = 2166136261u;
+    while (s && *s) {
+        h ^= (uint8_t)*s++;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static int target_set_init(target_set_t *set, size_t bucket_count) {
+    if (!set) return -1;
+    if (bucket_count < 1024) bucket_count = 1024;
+    set->buckets = (target_node_t **)calloc(bucket_count, sizeof(target_node_t *));
+    if (!set->buckets) return -1;
+    set->bucket_count = bucket_count;
+    set->size = 0;
+    return 0;
+}
+
+static int target_set_contains(target_set_t *set, const char *target) {
+    if (!set || !set->buckets || !target || !*target) return 0;
+    size_t idx = (size_t)(target_hash(target) % set->bucket_count);
+    for (target_node_t *n = set->buckets[idx]; n; n = n->next) {
+        if (strcmp(n->key, target) == 0) return 1;
     }
     return 0;
 }
 
-static int target_list_add(char ***list, size_t *count, const char *target) {
-    if (!list || !count || !target || !*target) return -1;
-    char **next = (char **)realloc(*list, sizeof(char *) * (*count + 1));
-    if (!next) return -1;
-    *list = next;
-    (*list)[*count] = strdup(target);
-    if (!(*list)[*count]) return -1;
-    (*count)++;
-    return 0;
+/* return: 1 inserted, 0 exists, -1 error */
+static int target_set_add(target_set_t *set, const char *target) {
+    if (!set || !set->buckets || !target || !*target) return -1;
+    size_t idx = (size_t)(target_hash(target) % set->bucket_count);
+    for (target_node_t *n = set->buckets[idx]; n; n = n->next) {
+        if (strcmp(n->key, target) == 0) return 0;
+    }
+
+    target_node_t *n = (target_node_t *)malloc(sizeof(target_node_t));
+    if (!n) return -1;
+    n->key = strdup(target);
+    if (!n->key) {
+        free(n);
+        return -1;
+    }
+    n->next = set->buckets[idx];
+    set->buckets[idx] = n;
+    set->size++;
+    return 1;
 }
 
-static void target_list_free(char **list, size_t count) {
-    if (!list) return;
-    for (size_t i = 0; i < count; i++) free(list[i]);
-    free(list);
+static void target_set_free(target_set_t *set) {
+    if (!set || !set->buckets) return;
+    for (size_t i = 0; i < set->bucket_count; i++) {
+        target_node_t *n = set->buckets[i];
+        while (n) {
+            target_node_t *next = n->next;
+            free(n->key);
+            free(n);
+            n = next;
+        }
+    }
+    free(set->buckets);
+    set->buckets = NULL;
+    set->bucket_count = 0;
+    set->size = 0;
 }
 
-static void load_target_list_file(const char *path, char ***out_list, size_t *out_count) {
-    if (out_list) *out_list = NULL;
-    if (out_count) *out_count = 0;
-    if (!path || !*path || !out_list || !out_count) return;
+static void load_target_set_file(const char *path, target_set_t *set) {
+    if (!path || !*path || !set) return;
 
     char **lines = NULL;
     size_t lc = 0;
@@ -456,10 +504,8 @@ static void load_target_list_file(const char *path, char ***out_list, size_t *ou
 
     for (size_t i = 0; i < lc; i++) {
         char *line = lines[i] ? str_trim(lines[i]) : NULL;
-        if (line && *line && !target_list_contains(*out_list, *out_count, line)) {
-            if (target_list_add(out_list, out_count, line) != 0) {
-                /* continue best-effort */
-            }
+        if (line && *line) {
+            (void)target_set_add(set, line);
         }
         free(lines[i]);
     }
@@ -470,11 +516,11 @@ static int feed_single_target(const char *ip, void *userdata) {
     feed_context_t *ctx = (feed_context_t *)userdata;
     if (!ip || !*ip || !ctx) return 0;
 
-    if (ctx->enable_resume_skip && target_list_contains(ctx->resume_done, ctx->resume_done_count, ip)) {
+    if (ctx->enable_resume_skip && target_set_contains(ctx->resume_done, ip)) {
         ctx->skipped_resume++;
         return 0;
     }
-    if (ctx->enable_history_skip && target_list_contains(ctx->history_done, ctx->history_done_count, ip)) {
+    if (ctx->enable_history_skip && target_set_contains(ctx->history_done, ip)) {
         ctx->skipped_history++;
         return 0;
     }
@@ -520,8 +566,9 @@ static int feed_single_target(const char *ip, void *userdata) {
 
     ctx->fed_count++;
 
-    if (ctx->enable_resume_skip && !target_list_contains(ctx->resume_done, ctx->resume_done_count, ip)) {
-        if (target_list_add(&ctx->resume_done, &ctx->resume_done_count, ip) == 0) {
+    if (ctx->enable_resume_skip) {
+        int ins = target_set_add(ctx->resume_done, ip);
+        if (ins == 1) {
             MUTEX_LOCK(lock_file);
             file_append(ctx->resume_checkpoint_file, ip);
             file_append(ctx->resume_checkpoint_file, "\n");
@@ -529,8 +576,9 @@ static int feed_single_target(const char *ip, void *userdata) {
         }
     }
 
-    if (ctx->enable_history_skip && !target_list_contains(ctx->history_done, ctx->history_done_count, ip)) {
-        if (target_list_add(&ctx->history_done, &ctx->history_done_count, ip) == 0) {
+    if (ctx->enable_history_skip) {
+        int ins = target_set_add(ctx->history_done, ip);
+        if (ins == 1) {
             MUTEX_LOCK(lock_file);
             file_append(ctx->history_file, ip);
             file_append(ctx->history_file, "\n");
@@ -791,10 +839,12 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
     feed_ctx.port_count = port_count;
     feed_ctx.fed_count = 0;
     feed_ctx.est_total = est_total;
-    feed_ctx.resume_done = NULL;
-    feed_ctx.resume_done_count = 0;
-    feed_ctx.history_done = NULL;
-    feed_ctx.history_done_count = 0;
+    target_set_t resume_set;
+    target_set_t history_set;
+    memset(&resume_set, 0, sizeof(resume_set));
+    memset(&history_set, 0, sizeof(history_set));
+    feed_ctx.resume_done = &resume_set;
+    feed_ctx.history_done = &history_set;
     feed_ctx.skipped_resume = 0;
     feed_ctx.skipped_history = 0;
     feed_ctx.enable_resume_skip = g_config.resume_enabled ? 1 : 0;
@@ -802,11 +852,15 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
     snprintf(feed_ctx.resume_checkpoint_file, sizeof(feed_ctx.resume_checkpoint_file), "%s/resume_targets.chk", g_config.base_dir);
     snprintf(feed_ctx.history_file, sizeof(feed_ctx.history_file), "%s/scanned_history.log", g_config.base_dir);
 
-    if (feed_ctx.enable_resume_skip) {
-        load_target_list_file(feed_ctx.resume_checkpoint_file, &feed_ctx.resume_done, &feed_ctx.resume_done_count);
+    if (feed_ctx.enable_resume_skip && target_set_init(feed_ctx.resume_done, 131071) == 0) {
+        load_target_set_file(feed_ctx.resume_checkpoint_file, feed_ctx.resume_done);
+    } else if (feed_ctx.enable_resume_skip) {
+        feed_ctx.enable_resume_skip = 0;
     }
-    if (feed_ctx.enable_history_skip) {
-        load_target_list_file(feed_ctx.history_file, &feed_ctx.history_done, &feed_ctx.history_done_count);
+    if (feed_ctx.enable_history_skip && target_set_init(feed_ctx.history_done, 131071) == 0) {
+        load_target_set_file(feed_ctx.history_file, feed_ctx.history_done);
+    } else if (feed_ctx.enable_history_skip) {
+        feed_ctx.enable_history_skip = 0;
     }
 
     for (size_t li = 0; li < raw_count && g_running && !g_reload; li++) {
@@ -840,8 +894,8 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
         printf("跳过统计 -> resume:%d history:%d\n", feed_ctx.skipped_resume, feed_ctx.skipped_history);
     }
 
-    target_list_free(feed_ctx.resume_done, feed_ctx.resume_done_count);
-    target_list_free(feed_ctx.history_done, feed_ctx.history_done_count);
+    target_set_free(feed_ctx.resume_done);
+    target_set_free(feed_ctx.history_done);
 }
 
 // 占位符接口实现
