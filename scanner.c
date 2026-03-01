@@ -4,6 +4,7 @@ static volatile int running_threads = 0;
 static volatile int verify_running_threads = 0;
 static volatile int feeding_in_progress = 0;
 static volatile int pending_verify_tasks = 0;
+static char progress_token[512] = "-";
 
 typedef struct verify_task_s {
     char ip[64];
@@ -46,6 +47,18 @@ static int verify_reserved_threads(void) {
     if (reserve < 1) reserve = 1;
     if (reserve > total) reserve = total;
     return reserve;
+}
+
+static void scanner_set_progress_token(const char *ip, uint16_t port, const char *user, const char *pass) {
+    char buf[512];
+    if (user && pass && *user && *pass) {
+        snprintf(buf, sizeof(buf), "%s:%d -> %s:%s", ip ? ip : "-", (int)port, user, pass);
+    } else {
+        snprintf(buf, sizeof(buf), "%s:%d", ip ? ip : "-", (int)port);
+    }
+    MUTEX_LOCK(lock_stats);
+    snprintf(progress_token, sizeof(progress_token), "%s", buf);
+    MUTEX_UNLOCK(lock_stats);
 }
 
 // 初始化锁
@@ -242,11 +255,108 @@ static void scanner_report_found_open(const worker_arg_t *task) {
     MUTEX_UNLOCK(lock_file);
 }
 
+static int contains_ci(const char *haystack, const char *needle) {
+    if (!haystack || !needle || !*needle) return 0;
+    size_t nlen = strlen(needle);
+    for (const char *p = haystack; *p; p++) {
+        size_t i = 0;
+        while (i < nlen && p[i] && tolower((unsigned char)p[i]) == tolower((unsigned char)needle[i])) {
+            i++;
+        }
+        if (i == nlen) return 1;
+    }
+    return 0;
+}
+
+static int xui_has_required_fingerprint(const char *ip, uint16_t port, int timeout_ms) {
+    char url_login[256];
+    char url_xui[256];
+    snprintf(url_login, sizeof(url_login), "http://%s:%d/login", ip, port);
+    snprintf(url_xui, sizeof(url_xui), "http://%s:%d/xui/", ip, port);
+
+    int has_form_userpass = 0;
+    int has_header_gin = 0;
+    int has_path_xui = 0;
+    int has_session_cookie = 0;
+    int has_json_api = 0;
+    int has_login_failed_json = 0;
+
+    http_response_t *r_login = http_get(url_login, timeout_ms);
+    if (r_login) {
+        if (r_login->headers) {
+            if (contains_ci(r_login->headers, "server: gin") || contains_ci(r_login->headers, " gin")) {
+                has_header_gin = 1;
+            }
+            if (contains_ci(r_login->headers, "set-cookie") && contains_ci(r_login->headers, "session")) {
+                has_session_cookie = 1;
+            }
+            if (contains_ci(r_login->headers, "application/json")) {
+                has_json_api = 1;
+            }
+            if (contains_ci(r_login->headers, "/xui/")) {
+                has_path_xui = 1;
+            }
+        }
+        if (r_login->body) {
+            if ((contains_ci(r_login->body, "username") || contains_ci(r_login->body, "user")) &&
+                (contains_ci(r_login->body, "password") || contains_ci(r_login->body, "pass"))) {
+                has_form_userpass = 1;
+            }
+            if (contains_ci(r_login->body, "/xui/")) {
+                has_path_xui = 1;
+            }
+            if (contains_ci(r_login->body, "json") || contains_ci(r_login->body, "\"success\"")) {
+                has_json_api = 1;
+            }
+        }
+        http_response_free(r_login);
+    }
+
+    http_response_t *r_xui = http_get(url_xui, timeout_ms);
+    if (r_xui) {
+        if (r_xui->headers && contains_ci(r_xui->headers, "server: gin")) has_header_gin = 1;
+        if (r_xui->headers && contains_ci(r_xui->headers, "set-cookie") && contains_ci(r_xui->headers, "session")) has_session_cookie = 1;
+        if (r_xui->headers && contains_ci(r_xui->headers, "/xui/")) has_path_xui = 1;
+        if (r_xui->body && contains_ci(r_xui->body, "/xui/")) has_path_xui = 1;
+        http_response_free(r_xui);
+    }
+
+    http_response_t *r_bad = http_post(url_login, "username=saia_probe&password=saia_probe_bad", timeout_ms);
+    if (r_bad) {
+        if (r_bad->headers && contains_ci(r_bad->headers, "application/json")) {
+            has_json_api = 1;
+        }
+        if (r_bad->body) {
+            if (contains_ci(r_bad->body, "\"success\"")) {
+                has_json_api = 1;
+            }
+            if ((contains_ci(r_bad->body, "\"success\":false") || contains_ci(r_bad->body, "\"success\": false") ||
+                 contains_ci(r_bad->body, "login-failed") || contains_ci(r_bad->body, "failed")) &&
+                (contains_ci(r_bad->body, "json") || contains_ci(r_bad->body, "\"success\""))) {
+                has_login_failed_json = 1;
+            }
+        }
+        http_response_free(r_bad);
+    }
+
+    if (!has_header_gin) return 0;
+    if (!(has_form_userpass || has_path_xui)) return 0;
+    if (!(has_json_api || has_login_failed_json)) return 0;
+
+    return 1;
+}
+
 static void scanner_run_verify_logic(const verify_task_t *task) {
     if (!task) return;
 
+    int xui_fingerprint_ok = -1;
+    if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY) {
+        xui_fingerprint_ok = xui_has_required_fingerprint(task->ip, task->port, 3000);
+    }
+
     if (task->work_mode == MODE_S5) {
         for (size_t i = 0; i < task->cred_count; i++) {
+            scanner_set_progress_token(task->ip, task->port, task->creds[i].username, task->creds[i].password);
             if (verify_socks5(task->ip, task->port, task->creds[i].username, task->creds[i].password, 3000)) {
                 MUTEX_LOCK(lock_stats);
                 g_state.total_verified++;
@@ -276,8 +386,12 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
     }
 
     if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) {
+        if (task->work_mode == MODE_XUI && !xui_fingerprint_ok) {
+            return;
+        }
         int found = 0;
-        for (size_t i = 0; i < task->cred_count; i++) {
+        for (size_t i = 0; i < task->cred_count && xui_fingerprint_ok; i++) {
+            scanner_set_progress_token(task->ip, task->port, task->creds[i].username, task->creds[i].password);
             if (verify_xui(task->ip, task->port,
                            task->creds[i].username, task->creds[i].password, 3000)) {
                 MUTEX_LOCK(lock_stats);
@@ -308,6 +422,7 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
 
         if (task->work_mode == MODE_DEEP && !found) {
             for (size_t i = 0; i < task->cred_count; i++) {
+                scanner_set_progress_token(task->ip, task->port, task->creds[i].username, task->creds[i].password);
                 if (verify_socks5(task->ip, task->port,
                                   task->creds[i].username, task->creds[i].password, 3000)) {
                     MUTEX_LOCK(lock_stats);
@@ -339,8 +454,12 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
 
     if (task->work_mode == MODE_VERIFY) {
         for (size_t i = 0; i < task->cred_count; i++) {
-            int ok = verify_xui(task->ip, task->port,
+            scanner_set_progress_token(task->ip, task->port, task->creds[i].username, task->creds[i].password);
+            int ok = 0;
+            if (xui_fingerprint_ok) {
+                ok = verify_xui(task->ip, task->port,
                                 task->creds[i].username, task->creds[i].password, 3000);
+            }
             if (!ok) ok = verify_socks5(task->ip, task->port,
                                          task->creds[i].username, task->creds[i].password, 3000);
             if (ok) {
@@ -524,6 +643,8 @@ void *worker_thread(void *arg) {
     if (do_verify) {
         scanner_enqueue_verify_task(task);
         scanner_pump_verify_workers();
+    } else {
+        scanner_set_progress_token(task->ip, task->port, "-", "-");
     }
 
     
@@ -591,6 +712,8 @@ static void write_scan_progress(feed_context_t *ctx, const char *status) {
     uint64_t scanned = g_state.total_scanned;
     uint64_t found = g_state.total_found;
     int threads_now = running_threads;
+    char tk_line[512];
+    snprintf(tk_line, sizeof(tk_line), "%s", progress_token[0] ? progress_token : "-");
     MUTEX_UNLOCK(lock_stats);
 
     snprintf(payload, sizeof(payload),
@@ -599,7 +722,9 @@ static void write_scan_progress(feed_context_t *ctx, const char *status) {
              "fed=%zu\n"
              "scanned=%llu\n"
              "found=%llu\n"
+             "audit_ips=%zu\n"
              "threads=%d\n"
+             "current_token=%s\n"
              "current_ip=%s\n"
              "current_port=%u\n"
              "updated=%llu\n",
@@ -608,7 +733,9 @@ static void write_scan_progress(feed_context_t *ctx, const char *status) {
              ctx->fed_count,
              (unsigned long long)scanned,
              (unsigned long long)found,
+             ctx->fed_count,
              threads_now,
+             tk_line,
              ctx->current_ip[0] ? ctx->current_ip : "-",
              (unsigned)ctx->current_port,
              (unsigned long long)get_current_time_ms());
@@ -1025,6 +1152,7 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
     verify_running_threads = 0;
     pending_verify_tasks = 0;
     feeding_in_progress = 0;
+    snprintf(progress_token, sizeof(progress_token), "-");
     MUTEX_UNLOCK(lock_stats);
 
     /* 快速估算总目标数 — 不做真正展开，只算数目 */
@@ -1165,6 +1293,7 @@ void scanner_cleanup(void) {
     pending_verify_tasks = 0;
     verify_running_threads = 0;
     feeding_in_progress = 0;
+    snprintf(progress_token, sizeof(progress_token), "-");
     MUTEX_UNLOCK(lock_stats);
 
     target_set_free(&g_resume_cache);

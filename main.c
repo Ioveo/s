@@ -488,9 +488,11 @@ typedef struct {
     char status[32];
     size_t est_total;
     size_t fed;
+    size_t audit_ips;
     uint64_t scanned;
     uint64_t found;
     int threads;
+    char current_token[512];
     char current_ip[64];
     int current_port;
     uint64_t updated_ms;
@@ -500,6 +502,7 @@ static void load_scan_progress(scan_progress_t *p) {
     if (!p) return;
     memset(p, 0, sizeof(*p));
     snprintf(p->status, sizeof(p->status), "N/A");
+    snprintf(p->current_token, sizeof(p->current_token), "-");
     snprintf(p->current_ip, sizeof(p->current_ip), "-");
 
     char path[MAX_PATH_LENGTH];
@@ -516,12 +519,16 @@ static void load_scan_progress(scan_progress_t *p) {
             p->est_total = (size_t)strtoull(line + 10, NULL, 10);
         } else if (strncmp(line, "fed=", 4) == 0) {
             p->fed = (size_t)strtoull(line + 4, NULL, 10);
+        } else if (strncmp(line, "audit_ips=", 10) == 0) {
+            p->audit_ips = (size_t)strtoull(line + 10, NULL, 10);
         } else if (strncmp(line, "scanned=", 8) == 0) {
             p->scanned = (uint64_t)strtoull(line + 8, NULL, 10);
         } else if (strncmp(line, "found=", 6) == 0) {
             p->found = (uint64_t)strtoull(line + 6, NULL, 10);
         } else if (strncmp(line, "threads=", 8) == 0) {
             p->threads = atoi(line + 8);
+        } else if (strncmp(line, "current_token=", 14) == 0) {
+            snprintf(p->current_token, sizeof(p->current_token), "%s", line + 14);
         } else if (strncmp(line, "current_ip=", 11) == 0) {
             snprintf(p->current_ip, sizeof(p->current_ip), "%s", line + 11);
         } else if (strncmp(line, "current_port=", 13) == 0) {
@@ -580,27 +587,23 @@ int saia_print_menu(void) {
     saia_menu_runtime_metrics(&ip_count, &tk_count, &ip_lines, last_tk, sizeof(last_tk));
     scan_progress_t pg;
     load_scan_progress(&pg);
-    uint64_t now_ms = (uint64_t)time(NULL) * 1000ULL;
-    long long progress_age = -1;
-    if (pg.updated_ms > 0 && now_ms >= pg.updated_ms) {
-        progress_age = (long long)((now_ms - pg.updated_ms) / 1000ULL);
-    }
+    if (pg.audit_ips == 0) pg.audit_ips = pg.fed;
 
     char left[8][160];
     char right[8][160];
     snprintf(left[0], sizeof(left[0]), "SAIA MASTER CONSOLE v%s %s", SAIA_VERSION, saia_menu_spinner(scan_running));
     snprintf(left[1], sizeof(left[1]), "审计:%s | 断点:%s | TG:%s", scan_running ? "运行中" : "已停止", g_config.resume_enabled ? "开" : "关", g_config.telegram_enabled ? "开" : "关");
-    snprintf(left[2], sizeof(left[2]), "模式:%d | 策略:%d | 线程:%d", g_config.mode, g_config.scan_mode, g_config.threads);
+    snprintf(left[2], sizeof(left[2]), "模式:%d | 策略:%d | 线程设定:%d", g_config.mode, g_config.scan_mode, g_config.threads);
     snprintf(left[3], sizeof(left[3]), "总发现:%llu | 总验真:%llu", (unsigned long long)total_found, (unsigned long long)total_verified);
     snprintf(left[4], sizeof(left[4]), "XUI 发现/验真:%llu/%llu", (unsigned long long)xui_found, (unsigned long long)xui_verified);
     snprintf(left[5], sizeof(left[5]), "S5  发现/验真:%llu/%llu", (unsigned long long)s5_found, (unsigned long long)s5_verified);
     snprintf(left[6], sizeof(left[6]), "CPU: %.1f%% | MEM_FREE: %.0fMB", g_config.backpressure.current_cpu, g_config.backpressure.current_mem);
-    snprintf(left[7], sizeof(left[7]), "状态: %s", scan_running ? "运行中" : "空闲");
+    snprintf(left[7], sizeof(left[7]), "状态:%s | 在跑线程:%d", scan_running ? "运行中" : "空闲", pg.threads);
 
     snprintf(right[0], sizeof(right[0]), "运行细节 %s", saia_menu_spinner(scan_running));
     snprintf(right[1], sizeof(right[1]), "会话: %s | 状态:%s", scan_running ? "saia_scan 运行中" : "未找到", pg.status);
     snprintf(right[2], sizeof(right[2]), "IP段:%zu | 预估IP:%zu | TK:%zu", ip_lines, ip_count, tk_count);
-    snprintf(right[3], sizeof(right[3]), "解析:%zu/%zu | 审计:%llu | 命中:%llu", pg.fed, pg.est_total, (unsigned long long)pg.scanned, (unsigned long long)pg.found);
+    snprintf(right[3], sizeof(right[3]), "解析:%zu/%zu | 审计IP:%zu | 命中:%llu", pg.fed, pg.est_total, pg.audit_ips, (unsigned long long)pg.found);
     snprintf(right[4], sizeof(right[4]), "压背: %s", g_config.backpressure.enabled ? "开" : "关");
     if (pg.current_port > 0) {
         snprintf(right[5], sizeof(right[5]), "审计目标: %s:%d", pg.current_ip, pg.current_port);
@@ -608,11 +611,7 @@ int saia_print_menu(void) {
         snprintf(right[5], sizeof(right[5]), "审计目标: %s", pg.current_ip);
     }
     snprintf(right[6], sizeof(right[6]), "最近命中TK: %s", last_tk);
-    if (progress_age >= 0) {
-        snprintf(right[7], sizeof(right[7]), "进度更新:%lld秒前 | 每1秒自动刷新", progress_age);
-    } else {
-        snprintf(right[7], sizeof(right[7]), "进度更新:暂无 | 每1秒自动刷新");
-    }
+    snprintf(right[7], sizeof(right[7]), "当前TK: %s", pg.current_token[0] ? pg.current_token : "-");
 
     for (int i = 0; i < 8; i++) {
         char fit[160];
@@ -1739,19 +1738,29 @@ int saia_nodes_menu(void) {
             if (file_read_lines(report_path, &lines, &lc) == 0 && lc > 0) {
                 int found = 0;
                 int verified = 0;
+
+                printf("\n[发现]\n");
                 for (size_t i = 0; i < lc; i++) {
                     if (!lines[i]) continue;
-                    if (strstr(lines[i], "[XUI_FOUND]") || strstr(lines[i], "[XUI_VERIFIED]")) {
+                    if (strstr(lines[i], "[XUI_FOUND]")) {
                         printf("  %s\n", lines[i]);
                         found++;
-                        if (strstr(lines[i], "[XUI_VERIFIED]")) verified++;
                     }
                 }
 
-                if (!found) {
+                printf("\n[验真]\n");
+                for (size_t i = 0; i < lc; i++) {
+                    if (!lines[i]) continue;
+                    if (strstr(lines[i], "[XUI_VERIFIED]")) {
+                        printf("  %s\n", lines[i]);
+                        verified++;
+                    }
+                }
+
+                if (!found && !verified) {
                     printf("  暂无 XUI 审计记录\n");
                 } else {
-                    printf("\n  XUI 记录: %d 条, 验真成功: %d 条\n", found, verified);
+                    printf("\n  XUI 发现: %d 条, 验真成功: %d 条\n", found, verified);
                 }
 
                 for (size_t i = 0; i < lc; i++) free(lines[i]);
@@ -1775,19 +1784,29 @@ int saia_nodes_menu(void) {
             if (file_read_lines(report_path, &lines, &lc) == 0 && lc > 0) {
                 int found = 0;
                 int verified = 0;
+
+                printf("\n[发现]\n");
                 for (size_t i = 0; i < lc; i++) {
                     if (!lines[i]) continue;
-                    if (strstr(lines[i], "[S5_FOUND]") || strstr(lines[i], "[S5_VERIFIED]")) {
+                    if (strstr(lines[i], "[S5_FOUND]")) {
                         printf("  %s\n", lines[i]);
                         found++;
-                        if (strstr(lines[i], "[S5_VERIFIED]")) verified++;
                     }
                 }
 
-                if (!found) {
+                printf("\n[验真]\n");
+                for (size_t i = 0; i < lc; i++) {
+                    if (!lines[i]) continue;
+                    if (strstr(lines[i], "[S5_VERIFIED]")) {
+                        printf("  %s\n", lines[i]);
+                        verified++;
+                    }
+                }
+
+                if (!found && !verified) {
                     printf("  暂无 S5 审计记录\n");
                 } else {
-                    printf("\n  S5 记录: %d 条, 验真成功: %d 条\n", found, verified);
+                    printf("\n  S5 发现: %d 条, 验真成功: %d 条\n", found, verified);
                 }
 
                 for (size_t i = 0; i < lc; i++) free(lines[i]);
