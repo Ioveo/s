@@ -223,49 +223,8 @@ int saia_interactive_mode(void) {
                 printf("退出程序\n");
                 break;
             case 1:
-                if (g_audit_running) {
-                    printf("\n>>> 审计任务已在运行中，请勿重复启动\n");
-                    break;
-                }
-
-                {
-                    int mode = 3;
-                    int scan_mode = 2;
-                    int threads = 1000;
-
-                    printf("\n【审计配置】\n");
-                    printf("模式 [1-4, 默认3]: ");
-                    fflush(stdout);
-                    if (scanf("%d", &mode) != 1) mode = 3;
-                    while (getchar() != '\n');
-                    if (mode < 1 || mode > 4) mode = 3;
-
-                    if (mode == 4) {
-                        scan_mode = 3;
-                    } else {
-                        printf("深度 [1-3, 默认2]: ");
-                        fflush(stdout);
-                        if (scanf("%d", &scan_mode) != 1) scan_mode = 2;
-                        while (getchar() != '\n');
-                        if (scan_mode < 1 || scan_mode > 3) scan_mode = 2;
-                    }
-
-                    printf("线程 [50-2000, 默认1000]: ");
-                    fflush(stdout);
-                    if (scanf("%d", &threads) != 1) threads = 1000;
-                    while (getchar() != '\n');
-                    if (threads < MIN_CONCURRENT_CONNECTIONS) threads = MIN_CONCURRENT_CONNECTIONS;
-                    if (threads > MAX_THREADS) threads = MAX_THREADS;
-
-                    if (saia_start_audit_async(mode, scan_mode, threads) == 0) {
-                        g_state.mode = mode;
-                        g_state.work_mode = scan_mode;
-                        g_state.threads = threads;
-                        printf("\n>>> 审计任务已后台启动，可直接进 [3] 实时监控\n");
-                    } else {
-                        printf("\n>>> 启动失败: 无法创建后台任务\n");
-                    }
-                }
+                /* 对齐主实现：进入完整审计配置流程（含默认端口/压背等子菜单） */
+                saia_run_audit_internal(0, 0, 0);
                 break;
             case 2:
                 if (!g_audit_running) {
