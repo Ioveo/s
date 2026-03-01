@@ -408,11 +408,76 @@ typedef struct {
     size_t port_count;
     size_t fed_count;
     size_t est_total;
+    char **resume_done;
+    size_t resume_done_count;
+    char **history_done;
+    size_t history_done_count;
+    int skipped_resume;
+    int skipped_history;
+    int enable_resume_skip;
+    int enable_history_skip;
+    char resume_checkpoint_file[MAX_PATH_LENGTH];
+    char history_file[MAX_PATH_LENGTH];
 } feed_context_t;
+
+static int target_list_contains(char **list, size_t count, const char *target) {
+    if (!list || !target || !*target) return 0;
+    for (size_t i = 0; i < count; i++) {
+        if (list[i] && strcmp(list[i], target) == 0) return 1;
+    }
+    return 0;
+}
+
+static int target_list_add(char ***list, size_t *count, const char *target) {
+    if (!list || !count || !target || !*target) return -1;
+    char **next = (char **)realloc(*list, sizeof(char *) * (*count + 1));
+    if (!next) return -1;
+    *list = next;
+    (*list)[*count] = strdup(target);
+    if (!(*list)[*count]) return -1;
+    (*count)++;
+    return 0;
+}
+
+static void target_list_free(char **list, size_t count) {
+    if (!list) return;
+    for (size_t i = 0; i < count; i++) free(list[i]);
+    free(list);
+}
+
+static void load_target_list_file(const char *path, char ***out_list, size_t *out_count) {
+    if (out_list) *out_list = NULL;
+    if (out_count) *out_count = 0;
+    if (!path || !*path || !out_list || !out_count) return;
+
+    char **lines = NULL;
+    size_t lc = 0;
+    if (file_read_lines(path, &lines, &lc) != 0 || !lines) return;
+
+    for (size_t i = 0; i < lc; i++) {
+        char *line = lines[i] ? str_trim(lines[i]) : NULL;
+        if (line && *line && !target_list_contains(*out_list, *out_count, line)) {
+            if (target_list_add(out_list, out_count, line) != 0) {
+                /* continue best-effort */
+            }
+        }
+        free(lines[i]);
+    }
+    free(lines);
+}
 
 static int feed_single_target(const char *ip, void *userdata) {
     feed_context_t *ctx = (feed_context_t *)userdata;
     if (!ip || !*ip || !ctx) return 0;
+
+    if (ctx->enable_resume_skip && target_list_contains(ctx->resume_done, ctx->resume_done_count, ip)) {
+        ctx->skipped_resume++;
+        return 0;
+    }
+    if (ctx->enable_history_skip && target_list_contains(ctx->history_done, ctx->history_done_count, ip)) {
+        ctx->skipped_history++;
+        return 0;
+    }
 
     for (size_t p = 0; p < ctx->port_count && g_running && !g_reload; p++) {
         while (g_running && !g_reload) {
@@ -454,6 +519,31 @@ static int feed_single_target(const char *ip, void *userdata) {
     }
 
     ctx->fed_count++;
+
+    if (ctx->enable_resume_skip && !target_list_contains(ctx->resume_done, ctx->resume_done_count, ip)) {
+        if (target_list_add(&ctx->resume_done, &ctx->resume_done_count, ip) == 0) {
+            MUTEX_LOCK(lock_file);
+            file_append(ctx->resume_checkpoint_file, ip);
+            file_append(ctx->resume_checkpoint_file, "\n");
+            MUTEX_UNLOCK(lock_file);
+        }
+    }
+
+    if (ctx->enable_history_skip && !target_list_contains(ctx->history_done, ctx->history_done_count, ip)) {
+        if (target_list_add(&ctx->history_done, &ctx->history_done_count, ip) == 0) {
+            MUTEX_LOCK(lock_file);
+            file_append(ctx->history_file, ip);
+            file_append(ctx->history_file, "\n");
+            MUTEX_UNLOCK(lock_file);
+        }
+    }
+
+    if (g_config.feed_interval > 0.0f) {
+        int ms = (int)(g_config.feed_interval * 1000.0f);
+        if (ms < 1) ms = 1;
+        saia_sleep(ms);
+    }
+
     if (ctx->fed_count % 500 == 0 || ctx->fed_count == ctx->est_total) {
         MUTEX_LOCK(lock_stats);
         int rt = running_threads;
@@ -701,6 +791,23 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
     feed_ctx.port_count = port_count;
     feed_ctx.fed_count = 0;
     feed_ctx.est_total = est_total;
+    feed_ctx.resume_done = NULL;
+    feed_ctx.resume_done_count = 0;
+    feed_ctx.history_done = NULL;
+    feed_ctx.history_done_count = 0;
+    feed_ctx.skipped_resume = 0;
+    feed_ctx.skipped_history = 0;
+    feed_ctx.enable_resume_skip = g_config.resume_enabled ? 1 : 0;
+    feed_ctx.enable_history_skip = g_config.skip_scanned ? 1 : 0;
+    snprintf(feed_ctx.resume_checkpoint_file, sizeof(feed_ctx.resume_checkpoint_file), "%s/resume_targets.chk", g_config.base_dir);
+    snprintf(feed_ctx.history_file, sizeof(feed_ctx.history_file), "%s/scanned_history.log", g_config.base_dir);
+
+    if (feed_ctx.enable_resume_skip) {
+        load_target_list_file(feed_ctx.resume_checkpoint_file, &feed_ctx.resume_done, &feed_ctx.resume_done_count);
+    }
+    if (feed_ctx.enable_history_skip) {
+        load_target_list_file(feed_ctx.history_file, &feed_ctx.history_done, &feed_ctx.history_done_count);
+    }
 
     for (size_t li = 0; li < raw_count && g_running && !g_reload; li++) {
         const char *line = raw_lines[li];
@@ -728,6 +835,13 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
     }
 
     printf("\n扫描结束\n");
+
+    if (feed_ctx.skipped_resume > 0 || feed_ctx.skipped_history > 0) {
+        printf("跳过统计 -> resume:%d history:%d\n", feed_ctx.skipped_resume, feed_ctx.skipped_history);
+    }
+
+    target_list_free(feed_ctx.resume_done, feed_ctx.resume_done_count);
+    target_list_free(feed_ctx.history_done, feed_ctx.history_done_count);
 }
 
 // 占位符接口实现

@@ -1125,6 +1125,11 @@ static void saia_resume_clear(void) {
     if (file_exists(path)) {
         file_remove(path);
     }
+
+    snprintf(path, sizeof(path), "%s/resume_targets.chk", g_config.base_dir);
+    if (file_exists(path)) {
+        file_remove(path);
+    }
 }
 
 static void saia_token_mask_sample(const char *src, char *dst, size_t dst_size) {
