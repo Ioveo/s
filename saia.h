@@ -17,6 +17,7 @@
     #include <windows.h>
     #include <ws2tcpip.h>
     #include <process.h>
+    #include <conio.h>
     #include <io.h>
     #define SAIA_PATH_SEP '\\'
     #define saia_sleep(ms) Sleep(ms)

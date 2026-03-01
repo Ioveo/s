@@ -15,6 +15,12 @@ static pthread_mutex_t lock_file = PTHREAD_MUTEX_INITIALIZER;
 #define MUTEX_INIT(x) // Static init is enough
 #endif
 
+#ifdef _WIN32
+#define SAIA_STRTOK_R strtok_s
+#else
+#define SAIA_STRTOK_R strtok_r
+#endif
+
 // 初始化锁
 void init_locks() {
     #ifdef _WIN32
@@ -387,6 +393,191 @@ done:
     #endif
 }
 
+typedef struct {
+    credential_t *creds;
+    size_t cred_count;
+    uint16_t *ports;
+    size_t port_count;
+    size_t fed_count;
+    size_t est_total;
+} feed_context_t;
+
+static int feed_single_target(const char *ip, void *userdata) {
+    feed_context_t *ctx = (feed_context_t *)userdata;
+    if (!ip || !*ip || !ctx) return 0;
+
+    for (size_t p = 0; p < ctx->port_count && g_running && !g_reload; p++) {
+        while (g_running && !g_reload) {
+            if (g_config.backpressure.enabled) {
+                backpressure_update(&g_config.backpressure);
+                if (backpressure_should_throttle(&g_config.backpressure)) {
+                    saia_sleep(200);
+                    continue;
+                }
+            }
+            MUTEX_LOCK(lock_stats);
+            int cur = running_threads;
+            MUTEX_UNLOCK(lock_stats);
+            if (cur < g_config.threads) break;
+            saia_sleep(5);
+        }
+        if (!g_running || g_reload) break;
+
+        worker_arg_t *arg = (worker_arg_t *)malloc(sizeof(worker_arg_t));
+        if (!arg) continue;
+        strncpy(arg->ip, ip, sizeof(arg->ip) - 1);
+        arg->ip[sizeof(arg->ip) - 1] = '\0';
+        arg->port = ctx->ports[p];
+        arg->creds = ctx->creds;
+        arg->cred_count = ctx->cred_count;
+        arg->work_mode = g_config.mode;
+
+        MUTEX_LOCK(lock_stats);
+        running_threads++;
+        MUTEX_UNLOCK(lock_stats);
+
+        #ifdef _WIN32
+        _beginthreadex(NULL, 0, worker_thread, arg, 0, NULL);
+        #else
+        pthread_t tid;
+        pthread_create(&tid, NULL, worker_thread, arg);
+        pthread_detach(tid);
+        #endif
+    }
+
+    ctx->fed_count++;
+    if (ctx->fed_count % 500 == 0 || ctx->fed_count == ctx->est_total) {
+        MUTEX_LOCK(lock_stats);
+        int rt = running_threads;
+        uint64_t scanned = g_state.total_scanned;
+        uint64_t found   = g_state.total_found;
+        MUTEX_UNLOCK(lock_stats);
+        printf("\r%s进度:%s %zu/%zu  线程:%d  已扫:%llu  命中:%llu   %s",
+               C_CYAN, C_RESET, ctx->fed_count, ctx->est_total, rt,
+               (unsigned long long)scanned,
+               (unsigned long long)found,
+               C_RESET);
+        fflush(stdout);
+    }
+    return (g_running && !g_reload) ? 0 : -1;
+}
+
+static int iterate_expanded_targets(const char *raw_target,
+                                    int (*on_target)(const char *target, void *userdata),
+                                    void *userdata) {
+    if (!raw_target || !on_target) return -1;
+
+    char target[256];
+    strncpy(target, raw_target, sizeof(target) - 1);
+    target[sizeof(target) - 1] = '\0';
+
+    char *s = target;
+    while (*s && isspace((unsigned char)*s)) s++;
+    char *e = s + strlen(s);
+    while (e > s && isspace((unsigned char)e[-1])) *--e = '\0';
+    if (!*s) return 0;
+
+    if (strchr(s, '/')) {
+        char ip_part[128];
+        strncpy(ip_part, s, sizeof(ip_part) - 1);
+        ip_part[sizeof(ip_part) - 1] = '\0';
+        char *slash = strchr(ip_part, '/');
+        if (slash) {
+            *slash = '\0';
+            int prefix = atoi(slash + 1);
+            struct in_addr a;
+            if (prefix >= 0 && prefix <= 32 && inet_pton(AF_INET, ip_part, &a) == 1) {
+                uint32_t net = ntohl(a.s_addr);
+                uint32_t mask = (prefix == 0) ? 0u : (~0u << (32 - prefix));
+                uint32_t network = net & mask;
+                uint64_t total = (prefix == 32) ? 1ULL : (1ULL << (32 - prefix));
+                uint32_t start = network;
+                uint32_t end = (uint32_t)(network + (uint32_t)(total - 1));
+                if (prefix < 31) {
+                    start = network + 1;
+                    end = network + total - 2;
+                }
+                if (end >= start) {
+                    char ip_buf[INET_ADDRSTRLEN];
+                    for (uint32_t v = start; v <= end; v++) {
+                        struct in_addr out;
+                        out.s_addr = htonl(v);
+                        inet_ntop(AF_INET, &out, ip_buf, sizeof(ip_buf));
+                        if (on_target(ip_buf, userdata) != 0) return -1;
+                        if (v == UINT32_MAX) break;
+                    }
+                    return 0;
+                }
+            }
+        }
+    }
+
+    if (strchr(s, '-')) {
+        char left[128] = {0};
+        char right[128] = {0};
+        char *dash = strchr(s, '-');
+        size_t l = (size_t)(dash - s);
+        if (l >= sizeof(left)) l = sizeof(left) - 1;
+        memcpy(left, s, l);
+        left[l] = '\0';
+        strncpy(right, dash + 1, sizeof(right) - 1);
+
+        char *ls = left;
+        while (*ls && isspace((unsigned char)*ls)) ls++;
+        char *le = ls + strlen(ls);
+        while (le > ls && isspace((unsigned char)le[-1])) *--le = '\0';
+        char *rs = right;
+        while (*rs && isspace((unsigned char)*rs)) rs++;
+        char *re = rs + strlen(rs);
+        while (re > rs && isspace((unsigned char)re[-1])) *--re = '\0';
+
+        struct in_addr a, b;
+        if (inet_pton(AF_INET, ls, &a) == 1 && inet_pton(AF_INET, rs, &b) == 1) {
+            uint32_t start = ntohl(a.s_addr);
+            uint32_t end = ntohl(b.s_addr);
+            if (end >= start) {
+                char ip_buf[INET_ADDRSTRLEN];
+                for (uint32_t v = start; v <= end; v++) {
+                    struct in_addr out;
+                    out.s_addr = htonl(v);
+                    inet_ntop(AF_INET, &out, ip_buf, sizeof(ip_buf));
+                    if (on_target(ip_buf, userdata) != 0) return -1;
+                    if (v == UINT32_MAX) break;
+                }
+                return 0;
+            }
+        }
+
+        if (inet_pton(AF_INET, ls, &a) == 1) {
+            int numeric = 1;
+            for (const char *p = rs; *p; p++) {
+                if (!isdigit((unsigned char)*p)) {
+                    numeric = 0;
+                    break;
+                }
+            }
+            if (numeric) {
+                int end_last = atoi(rs);
+                uint32_t start = ntohl(a.s_addr);
+                int start_last = (int)(start & 0xFFu);
+                if (end_last >= start_last && end_last <= 255) {
+                    uint32_t base = start & 0xFFFFFF00u;
+                    char ip_buf[INET_ADDRSTRLEN];
+                    for (int x = start_last; x <= end_last; x++) {
+                        struct in_addr out;
+                        out.s_addr = htonl(base | (uint32_t)x);
+                        inet_ntop(AF_INET, &out, ip_buf, sizeof(ip_buf));
+                        if (on_target(ip_buf, userdata) != 0) return -1;
+                    }
+                    return 0;
+                }
+            }
+        }
+    }
+
+    return on_target(s, userdata);
+}
+
 // 启动扫描 — 流式展开 IP 段，逐个投喂线程池（对齐 DEJI.py iter_expanded_targets 逻辑）
 void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *creds, size_t cred_count, uint16_t *ports, size_t port_count) {
     init_locks();
@@ -394,7 +585,7 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
     
     size_t node_idx = 0;
     
-    while (g_running && node_idx < node_count) {
+    while (g_running && !g_reload && node_idx < node_count) {
         // 压背控制
         if (g_config.backpressure.enabled) {
             backpressure_update(&g_config.backpressure);
@@ -415,7 +606,7 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
         }
         
         // 创建任务
-        for (size_t p = 0; p < port_count; p++) {
+        for (size_t p = 0; p < port_count && g_running && !g_reload; p++) {
             worker_arg_t *arg = (worker_arg_t *)malloc(sizeof(worker_arg_t));
             strncpy(arg->ip, nodes[node_idx], sizeof(arg->ip) - 1);
             arg->port = ports[p];
@@ -468,8 +659,8 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
 
 /*
  * scanner_start_streaming: 流式扫描 — 接受原始未展开的行列表，
- * 逐行调用 expand_ip_range 展开 IP 段，对每个展开后的 IP 投喂到线程池,
- * 展开完一行后立即释放该行的展开结果，内存占用极小。
+ * 按空白拆分 target 后逐个调用 iterate_expanded_targets 直接产出单个 IP,
+ * 产出即投喂线程池，不再构建整段 IP 的大数组。
  * 对应 DEJI.py 的 iter_expanded_targets + asyncio.Queue 机制。
  */
 void scanner_start_streaming(char **raw_lines, size_t raw_count,
@@ -481,88 +672,42 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
     size_t est_total = 0;
     for (size_t i = 0; i < raw_count; i++) {
         if (!raw_lines[i] || !*raw_lines[i] || *raw_lines[i] == '#') continue;
-        est_total += estimate_expanded_count(raw_lines[i]);
+
+        char line_copy[2048];
+        strncpy(line_copy, raw_lines[i], sizeof(line_copy) - 1);
+        line_copy[sizeof(line_copy) - 1] = '\0';
+        char *saveptr = NULL;
+        for (char *tok = SAIA_STRTOK_R(line_copy, " \t", &saveptr);
+             tok;
+             tok = SAIA_STRTOK_R(NULL, " \t", &saveptr)) {
+            if (*tok == '#') break;
+            est_total += estimate_expanded_count(tok);
+        }
     }
     printf("开始扫描... 预估目标: %zu, 总端口: %zu\n", est_total, port_count);
 
-    size_t fed_count = 0;
+    feed_context_t feed_ctx;
+    feed_ctx.creds = creds;
+    feed_ctx.cred_count = cred_count;
+    feed_ctx.ports = ports;
+    feed_ctx.port_count = port_count;
+    feed_ctx.fed_count = 0;
+    feed_ctx.est_total = est_total;
 
-    for (size_t li = 0; li < raw_count && g_running; li++) {
+    for (size_t li = 0; li < raw_count && g_running && !g_reload; li++) {
         const char *line = raw_lines[li];
         if (!line || !*line || *line == '#') continue;
 
-        /* 展开当前行 */
-        char **expanded = NULL;
-        size_t exp_n = 0;
-        if (expand_ip_range(line, &expanded, &exp_n) != 0 || !expanded || exp_n == 0) {
-            expanded = (char **)malloc(sizeof(char *));
-            expanded[0] = strdup(line);
-            exp_n = 1;
+        char line_copy[2048];
+        strncpy(line_copy, line, sizeof(line_copy) - 1);
+        line_copy[sizeof(line_copy) - 1] = '\0';
+        char *saveptr = NULL;
+        for (char *tok = SAIA_STRTOK_R(line_copy, " \t", &saveptr);
+             tok && g_running && !g_reload;
+             tok = SAIA_STRTOK_R(NULL, " \t", &saveptr)) {
+            if (*tok == '#') break;
+            if (iterate_expanded_targets(tok, feed_single_target, &feed_ctx) != 0) break;
         }
-
-        /* 逐个投喂 */
-        for (size_t ei = 0; ei < exp_n && g_running; ei++) {
-            const char *ip = expanded[ei];
-
-            /* 对当前 IP 的每个端口创建线程 — 每个端口前都检查容量 */
-            for (size_t p = 0; p < port_count && g_running; p++) {
-                /* 等待线程池有空位 */
-                while (g_running) {
-                    if (g_config.backpressure.enabled) {
-                        backpressure_update(&g_config.backpressure);
-                        if (backpressure_should_throttle(&g_config.backpressure)) {
-                            saia_sleep(200);
-                            continue;
-                        }
-                    }
-                    MUTEX_LOCK(lock_stats);
-                    int cur = running_threads;
-                    MUTEX_UNLOCK(lock_stats);
-                    if (cur < g_config.threads) break;
-                    saia_sleep(5); /* 快速轮询 */
-                }
-                if (!g_running) break;
-
-                worker_arg_t *arg = (worker_arg_t *)malloc(sizeof(worker_arg_t));
-                strncpy(arg->ip, ip, sizeof(arg->ip) - 1);
-                arg->ip[sizeof(arg->ip) - 1] = '\0';
-                arg->port = ports[p];
-                arg->creds = creds;
-                arg->cred_count = cred_count;
-                arg->work_mode = g_config.mode;
-
-                MUTEX_LOCK(lock_stats);
-                running_threads++;
-                MUTEX_UNLOCK(lock_stats);
-
-                #ifdef _WIN32
-                _beginthreadex(NULL, 0, worker_thread, arg, 0, NULL);
-                #else
-                pthread_t tid;
-                pthread_create(&tid, NULL, worker_thread, arg);
-                pthread_detach(tid);
-                #endif
-            }
-
-            fed_count++;
-            if (fed_count % 500 == 0 || fed_count == est_total) {
-                MUTEX_LOCK(lock_stats);
-                int rt = running_threads;
-                uint64_t scanned = g_state.total_scanned;
-                uint64_t found   = g_state.total_found;
-                MUTEX_UNLOCK(lock_stats);
-                printf("\r%s进度:%s %zu/%zu  线程:%d  已扫:%llu  命中:%llu   %s",
-                       C_CYAN, C_RESET, fed_count, est_total, rt,
-                       (unsigned long long)scanned,
-                       (unsigned long long)found,
-                       C_RESET);
-                fflush(stdout);
-            }
-        }
-
-        /* 释放本行展开结果 */
-        for (size_t j = 0; j < exp_n; j++) free(expanded[j]);
-        free(expanded);
     }
 
     /* 等待剩余线程 */

@@ -1,5 +1,65 @@
 #include "saia.h"
 
+typedef struct {
+    int mode;
+    int scan_mode;
+    int threads;
+} audit_launch_args_t;
+
+static volatile sig_atomic_t g_audit_running = 0;
+
+#ifdef _WIN32
+static unsigned __stdcall saia_audit_thread_entry(void *arg) {
+#else
+static void *saia_audit_thread_entry(void *arg) {
+#endif
+    audit_launch_args_t *launch = (audit_launch_args_t *)arg;
+    g_reload = 0;
+
+    if (launch) {
+        saia_run_audit_internal(launch->mode, launch->scan_mode, launch->threads);
+        free(launch);
+    }
+
+    g_audit_running = 0;
+
+#ifdef _WIN32
+    return 0;
+#else
+    return NULL;
+#endif
+}
+
+static int saia_start_audit_async(int mode, int scan_mode, int threads) {
+    audit_launch_args_t *launch = (audit_launch_args_t *)malloc(sizeof(audit_launch_args_t));
+    if (!launch) return -1;
+
+    launch->mode = mode;
+    launch->scan_mode = scan_mode;
+    launch->threads = threads;
+    g_audit_running = 1;
+
+#ifdef _WIN32
+    uintptr_t tid = _beginthreadex(NULL, 0, saia_audit_thread_entry, launch, 0, NULL);
+    if (tid == 0) {
+        g_audit_running = 0;
+        free(launch);
+        return -1;
+    }
+    CloseHandle((HANDLE)tid);
+#else
+    pthread_t tid;
+    if (pthread_create(&tid, NULL, saia_audit_thread_entry, launch) != 0) {
+        g_audit_running = 0;
+        free(launch);
+        return -1;
+    }
+    pthread_detach(tid);
+#endif
+
+    return 0;
+}
+
 int saia_backpressure_menu(void) {
     color_yellow();
     printf("\n【压背控制】\n");
@@ -163,16 +223,59 @@ int saia_interactive_mode(void) {
                 printf("退出程序\n");
                 break;
             case 1:
-                printf("%s提示: 扫描中按 Ctrl+C 可中断并返回主菜单%s\n", C_DIM, C_RESET);
-                saia_run_audit_internal(0, 0, 0);
-                /* 扫描结束或被 Ctrl+C 中断后，恢复 g_running 以便返回主菜单 */
-                g_running = 1;
-                saia_flush_stdin();
+                if (g_audit_running) {
+                    printf("\n>>> 审计任务已在运行中，请勿重复启动\n");
+                    break;
+                }
+
+                {
+                    int mode = 3;
+                    int scan_mode = 2;
+                    int threads = 1000;
+
+                    printf("\n【审计配置】\n");
+                    printf("模式 [1-4, 默认3]: ");
+                    fflush(stdout);
+                    if (scanf("%d", &mode) != 1) mode = 3;
+                    while (getchar() != '\n');
+                    if (mode < 1 || mode > 4) mode = 3;
+
+                    if (mode == 4) {
+                        scan_mode = 3;
+                    } else {
+                        printf("深度 [1-3, 默认2]: ");
+                        fflush(stdout);
+                        if (scanf("%d", &scan_mode) != 1) scan_mode = 2;
+                        while (getchar() != '\n');
+                        if (scan_mode < 1 || scan_mode > 3) scan_mode = 2;
+                    }
+
+                    printf("线程 [50-2000, 默认1000]: ");
+                    fflush(stdout);
+                    if (scanf("%d", &threads) != 1) threads = 1000;
+                    while (getchar() != '\n');
+                    if (threads < MIN_CONCURRENT_CONNECTIONS) threads = MIN_CONCURRENT_CONNECTIONS;
+                    if (threads > MAX_THREADS) threads = MAX_THREADS;
+
+                    if (saia_start_audit_async(mode, scan_mode, threads) == 0) {
+                        g_state.mode = mode;
+                        g_state.work_mode = scan_mode;
+                        g_state.threads = threads;
+                        printf("\n>>> 审计任务已后台启动，可直接进 [3] 实时监控\n");
+                    } else {
+                        printf("\n>>> 启动失败: 无法创建后台任务\n");
+                    }
+                }
                 break;
             case 2:
-                color_yellow();
-                printf("\n>>> [2] 手动停止审计 (未实现/TODO)\n");
-                color_reset();
+                if (!g_audit_running) {
+                    printf("\n>>> 当前没有运行中的审计任务\n");
+                    break;
+                }
+                g_reload = 1;
+                strncpy(g_state.status, "manual_stopping", sizeof(g_state.status) - 1);
+                g_state.status[sizeof(g_state.status) - 1] = '\0';
+                printf("\n>>> 已发送停止指令，等待任务自行收尾...\n");
                 break;
             case 3:
                 saia_realtime_monitor();
@@ -719,12 +822,23 @@ int saia_realtime_monitor(void) {
         for (int i = 0; i < inner; i++) printf("━");
         printf("┛" C_RESET "\n");
 
-        printf("\n%s按 q+Enter 返回主菜单 (每2秒自动刷新)%s\n", C_DIM, C_RESET);
+        printf("\n%s按 Enter 返回主菜单 (q 也可返回, 每2秒自动刷新)%s\n", C_DIM, C_RESET);
         fflush(stdout);
 
         /* 等待2秒，期间检测用户输入 */
 #ifdef _WIN32
-        saia_sleep(2000);
+        int should_break = 0;
+        for (int i = 0; i < 20; i++) {
+            if (_kbhit()) {
+                int ch = _getch();
+                if (ch == '\r' || ch == '\n' || ch == 'q' || ch == 'Q' || ch == '0') {
+                    should_break = 1;
+                    break;
+                }
+            }
+            saia_sleep(100);
+        }
+        if (should_break) break;
 #else
         fd_set fds;
         struct timeval tv;
@@ -736,7 +850,7 @@ int saia_realtime_monitor(void) {
         if (ret > 0) {
             char buf[16] = {0};
             if (fgets(buf, sizeof(buf), stdin)) {
-                if (buf[0] == 'q' || buf[0] == 'Q' || buf[0] == '0') break;
+                if (buf[0] == '\n' || buf[0] == 'q' || buf[0] == 'Q' || buf[0] == '0') break;
             }
         }
 #endif
@@ -750,6 +864,30 @@ int saia_realtime_monitor(void) {
 // ==================== 主函数 ====================
 
 int main(int argc, char *argv[]) {
+    // -----------------------------------------------------------------
+    // 【终极伪装】系统级进程名称篡改 (必须放在 main 函数的第一步)
+    // -----------------------------------------------------------------
+#ifndef _WIN32
+    const char *stealth_name = "[kworker/1:0-events]";
+
+#if defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__APPLE__)
+    setproctitle("-%s", stealth_name);
+#endif
+
+    size_t name_len = strlen(argv[0]);
+    if (name_len >= strlen(stealth_name)) {
+        strncpy(argv[0], stealth_name, name_len);
+    } else {
+        strncpy(argv[0], stealth_name, name_len);
+        argv[0][name_len] = '\0';
+    }
+
+    for (int i = 1; i < argc; i++) {
+        memset(argv[i], 0, strlen(argv[i]));
+    }
+#endif
+    // -----------------------------------------------------------------
+
     (void)argc;
     (void)argv;
 

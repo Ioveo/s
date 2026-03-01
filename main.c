@@ -643,7 +643,12 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     scanner_start_streaming(raw_nodes, raw_node_count, creds, cred_count, ports, port_count);
 
-    strcpy(g_state.status, "completed");
+    if (g_reload) {
+        strcpy(g_state.status, "manual_stopped");
+        g_reload = 0;
+    } else {
+        strcpy(g_state.status, "completed");
+    }
 
     // 清理数据
 
