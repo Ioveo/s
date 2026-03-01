@@ -409,11 +409,49 @@ int saia_interactive_mode(void) {
                 break;
 
             /* ========== 配置与通知 ========== */
-            case 10:
-                color_yellow();
-                printf("\n>>> [10] 断点续连 (未实现/TODO)\n");
+            case 10: {
+                char resume_path[MAX_PATH_LENGTH];
+                snprintf(resume_path, sizeof(resume_path), "%s/resume_config.json", g_config.base_dir);
+                color_cyan();
+                printf("\n>>> [10] 断点续连\n");
                 color_reset();
+
+                printf("当前状态: %s\n", g_config.resume_enabled ? "已启用" : "已禁用");
+                if (file_exists(resume_path)) {
+                    char *raw = file_read_all(resume_path);
+                    if (raw) {
+                        printf("断点文件: %s\n", resume_path);
+                        printf("断点内容:\n%s\n", raw);
+                        free(raw);
+                    }
+                } else {
+                    printf("断点文件: 不存在\n");
+                }
+
+                printf("[1] 启用断点续连\n");
+                printf("[2] 禁用断点续连\n");
+                printf("[3] 清除断点文件\n");
+                printf("[0] 返回\n");
+                printf("选择: ");
+                fflush(stdout);
+
+                char input[16] = {0};
+                if (!fgets(input, sizeof(input), stdin)) break;
+
+                if (input[0] == '1') {
+                    g_config.resume_enabled = 1;
+                    config_save(&g_config, g_config.state_file);
+                    printf(">>> 已启用断点续连\n");
+                } else if (input[0] == '2') {
+                    g_config.resume_enabled = 0;
+                    config_save(&g_config, g_config.state_file);
+                    printf(">>> 已禁用断点续连\n");
+                } else if (input[0] == '3') {
+                    if (file_exists(resume_path)) file_remove(resume_path);
+                    printf(">>> 已清除断点文件\n");
+                }
                 break;
+            }
             case 11:
                 color_yellow();
                 printf("\n>>> [11] 进料加速 (未实现/TODO)\n");

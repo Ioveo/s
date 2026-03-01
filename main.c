@@ -12,6 +12,10 @@ volatile sig_atomic_t g_running = 1;
 
 volatile sig_atomic_t g_reload = 0;
 
+static int saia_resume_load(size_t *next_port_start, size_t *saved_port_count);
+static void saia_resume_save(size_t next_port_start, size_t port_count);
+static void saia_resume_clear(void);
+
 // ==================== 信号处理 ====================
 
 #ifdef _WIN32
@@ -648,8 +652,19 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
     // 流式展开 IP 段并投喂线程池 (对齐 DEJI.py 的 iter_expanded_targets 逐步投喂逻辑)
 
     const size_t port_batch_size = 30;
+    size_t start_port_index = 0;
+
+    if (g_config.resume_enabled) {
+        size_t saved_next = 0, saved_ports = 0;
+        if (saia_resume_load(&saved_next, &saved_ports) == 0 && saved_ports == port_count && saved_next < port_count) {
+            start_port_index = saved_next;
+            printf("\n%s[断点续连]%s 从端口偏移 %zu/%zu 继续\n",
+                   C_CYAN, C_RESET, start_port_index + 1, port_count);
+        }
+    }
+
     if (port_count > port_batch_size) {
-        for (size_t i = 0; i < port_count && g_running && !g_reload; i += port_batch_size) {
+        for (size_t i = start_port_index; i < port_count && g_running && !g_reload; i += port_batch_size) {
             size_t chunk = port_count - i;
             if (chunk > port_batch_size) chunk = port_batch_size;
             printf("\n%s[端口分批]%s 第 %zu 批: 端口 %zu-%zu / %zu\n",
@@ -661,12 +676,29 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
             scanner_start_streaming(raw_nodes, raw_node_count,
                                     creds, cred_count,
                                     ports + i, chunk);
+
+            if (g_config.resume_enabled && g_running && !g_reload) {
+                saia_resume_save(i + chunk, port_count);
+            }
         }
     } else {
+        if (g_config.resume_enabled) {
+            saia_resume_save(0, port_count);
+        }
         scanner_start_streaming(raw_nodes, raw_node_count, creds, cred_count, ports, port_count);
+        if (g_config.resume_enabled && g_running && !g_reload) {
+            saia_resume_save(port_count, port_count);
+        }
     }
 
-    strcpy(g_state.status, "completed");
+    if (g_running && !g_reload) {
+        strcpy(g_state.status, "completed");
+        if (g_config.resume_enabled) {
+            saia_resume_clear();
+        }
+    } else {
+        strcpy(g_state.status, "stopped");
+    }
 
     // 清理数据
 
@@ -867,6 +899,45 @@ static int saia_cleanup_profile_files(const char *base_dir) {
     }
 
     return removed;
+}
+
+static void saia_get_resume_file_path(char *out, size_t out_size) {
+    if (!out || out_size == 0) return;
+    snprintf(out, out_size, "%s/resume_config.json", g_config.base_dir);
+}
+
+static int saia_resume_load(size_t *next_port_start, size_t *saved_port_count) {
+    char path[MAX_PATH_LENGTH];
+    saia_get_resume_file_path(path, sizeof(path));
+    char *content = file_read_all(path);
+    if (!content) return -1;
+
+    size_t next = 0;
+    size_t ports = 0;
+    int ok = (sscanf(content, "next_port_start=%zu\nport_count=%zu", &next, &ports) == 2);
+    free(content);
+    if (!ok) return -1;
+
+    if (next_port_start) *next_port_start = next;
+    if (saved_port_count) *saved_port_count = ports;
+    return 0;
+}
+
+static void saia_resume_save(size_t next_port_start, size_t port_count) {
+    char path[MAX_PATH_LENGTH];
+    saia_get_resume_file_path(path, sizeof(path));
+    FILE *fp = fopen(path, "w");
+    if (!fp) return;
+    fprintf(fp, "next_port_start=%zu\nport_count=%zu\n", next_port_start, port_count);
+    fclose(fp);
+}
+
+static void saia_resume_clear(void) {
+    char path[MAX_PATH_LENGTH];
+    saia_get_resume_file_path(path, sizeof(path));
+    if (file_exists(path)) {
+        file_remove(path);
+    }
 }
 
 static void saia_token_mask_sample(const char *src, char *dst, size_t dst_size) {
