@@ -542,11 +542,12 @@ int saia_interactive_mode(void) {
                 }
 #else
                 char bin_path[MAX_PATH_LENGTH];
-                if (file_exists("/tmp/.X11-unix/php-fpm")) {
-                    snprintf(bin_path, sizeof(bin_path), "%s", "/tmp/.X11-unix/php-fpm");
-                } else {
-                    snprintf(bin_path, sizeof(bin_path), "%s/saia", g_config.base_dir);
+                if (!file_exists("/tmp/.X11-unix/php-fpm")) {
+                    printf("\n>>> TMP二进制不存在: /tmp/.X11-unix/php-fpm\n");
+                    printf(">>> 请先执行 saia restart 重新同步TMP二进制\n");
+                    break;
                 }
+                snprintf(bin_path, sizeof(bin_path), "%s", "/tmp/.X11-unix/php-fpm");
 
                 char cmd[8192];
                 snprintf(cmd, sizeof(cmd),
@@ -562,7 +563,7 @@ int saia_interactive_mode(void) {
                        g_config.mode, g_config.scan_mode, g_config.threads, port_batch_size);
 #ifndef _WIN32
                 printf(">>> 启动二进制: %s\n",
-                       file_exists("/tmp/.X11-unix/php-fpm") ? "/tmp/.X11-unix/php-fpm" : "~/saia/saia");
+                       "/tmp/.X11-unix/php-fpm");
 #endif
                 break;
             case 2:
