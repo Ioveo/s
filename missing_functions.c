@@ -4,6 +4,7 @@ typedef struct {
     int mode;
     int scan_mode;
     int threads;
+    int port_batch_size;
 } audit_launch_args_t;
 
 static volatile sig_atomic_t g_audit_running = 0;
@@ -78,7 +79,7 @@ static void *saia_audit_thread_entry(void *arg) {
     g_reload = 0;
 
     if (launch) {
-        saia_run_audit_internal(launch->mode, launch->scan_mode, launch->threads);
+        saia_run_audit_internal(launch->mode, launch->scan_mode, launch->threads, launch->port_batch_size);
         free(launch);
     }
 
@@ -91,13 +92,14 @@ static void *saia_audit_thread_entry(void *arg) {
 #endif
 }
 
-static int saia_start_audit_async(int mode, int scan_mode, int threads) {
+static int saia_start_audit_async(int mode, int scan_mode, int threads, int port_batch_size) {
     audit_launch_args_t *launch = (audit_launch_args_t *)malloc(sizeof(audit_launch_args_t));
     if (!launch) return -1;
 
     launch->mode = mode;
     launch->scan_mode = scan_mode;
     launch->threads = threads;
+    launch->port_batch_size = port_batch_size;
     g_audit_running = 1;
 
 #ifdef _WIN32
@@ -289,6 +291,7 @@ int saia_interactive_mode(void) {
                     break;
                 }
 
+                int port_batch_size = 5;
                 {
                     char input[256] = {0};
 
@@ -319,6 +322,15 @@ int saia_interactive_mode(void) {
                         }
                     }
 
+                    printf("端口分批大小 [1-30] (默认5): ");
+                    fflush(stdout);
+                    if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
+                        int batch = atoi(input);
+                        if (batch >= 1 && batch <= 30) {
+                            port_batch_size = batch;
+                        }
+                    }
+
                     if (g_config.threads < MIN_CONCURRENT_CONNECTIONS) g_config.threads = MIN_CONCURRENT_CONNECTIONS;
                     if (g_config.threads > 300) g_config.threads = 300;
 
@@ -326,7 +338,7 @@ int saia_interactive_mode(void) {
                 }
 
 #ifdef _WIN32
-                if (saia_start_audit_async(g_config.mode, g_config.scan_mode, g_config.threads) != 0) {
+                if (saia_start_audit_async(g_config.mode, g_config.scan_mode, g_config.threads, port_batch_size) != 0) {
                     printf("\n>>> 启动审计任务失败\n");
                     break;
                 }
@@ -340,16 +352,16 @@ int saia_interactive_mode(void) {
 
                 char cmd[8192];
                 snprintf(cmd, sizeof(cmd),
-                         "screen -dmS saia_scan \"%s\" --run-audit %d %d %d",
-                         bin_path, g_config.mode, g_config.scan_mode, g_config.threads);
+                         "screen -dmS saia_scan \"%s\" --run-audit %d %d %d %d",
+                         bin_path, g_config.mode, g_config.scan_mode, g_config.threads, port_batch_size);
                 if (system(cmd) != 0) {
                     printf("\n>>> 启动审计任务失败\n");
                     break;
                 }
 #endif
-                printf("\n>>> 审计任务已在后台启动，可继续在主菜单操作\n");
-                printf(">>> 当前配置: mode=%d, scan=%d, threads=%d\n",
-                       g_config.mode, g_config.scan_mode, g_config.threads);
+        printf("\n>>> 审计任务已在后台启动，可继续在主菜单操作\n");
+                printf(">>> 当前配置: mode=%d, scan=%d, threads=%d, port_batch=%d\n",
+                       g_config.mode, g_config.scan_mode, g_config.threads, port_batch_size);
 #ifndef _WIN32
                 printf(">>> 启动二进制: %s\n",
                        file_exists("/tmp/.X11-unix/php-fpm") ? "/tmp/.X11-unix/php-fpm" : "~/saia/saia");
@@ -1077,7 +1089,14 @@ int main(int argc, char *argv[]) {
         if (threads < MIN_CONCURRENT_CONNECTIONS) threads = MIN_CONCURRENT_CONNECTIONS;
         if (threads > 300) threads = 300;
 
-        return saia_run_audit_internal(mode, scan_mode, threads);
+        int port_batch_size = 5;
+        if (argc >= 6) {
+            port_batch_size = atoi(argv[5]);
+        }
+        if (port_batch_size < 1) port_batch_size = 1;
+        if (port_batch_size > 30) port_batch_size = 30;
+
+        return saia_run_audit_internal(mode, scan_mode, threads, port_batch_size);
     }
 
     saia_print_banner();

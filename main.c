@@ -302,14 +302,15 @@ int saia_print_menu(void) {
 // ==================== 开始审计 ====================
 
 int saia_run_audit(void) {
-    return saia_run_audit_internal(0, 0, 0);
+    return saia_run_audit_internal(0, 0, 0, 0);
 }
 
-int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads) {
+int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads, int auto_port_batch_size) {
 
     char input[256];
 
     int mode, scan_mode, threads;
+    size_t port_batch_size = 5;
 
     char ports_raw[1024] = {0};
 
@@ -326,6 +327,10 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
         scan_mode = auto_scan_mode;
 
         threads = auto_threads;
+
+        if (auto_port_batch_size > 0) {
+            port_batch_size = (size_t)auto_port_batch_size;
+        }
 
     } else {
 
@@ -374,6 +379,15 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
     if (threads < MIN_CONCURRENT_CONNECTIONS) threads = MIN_CONCURRENT_CONNECTIONS;
 
     if (threads > 300) threads = 300;
+
+    printf("\n端口分批大小 [1-30] (默认 5): ");
+    fflush(stdout);
+    if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
+        int batch = atoi(input);
+        if (batch >= 1 && batch <= 30) {
+            port_batch_size = (size_t)batch;
+        }
+    }
 
     // 端口
     /* 根据已选模式显示默认端口提示 */
@@ -651,7 +665,8 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     // 流式展开 IP 段并投喂线程池 (对齐 DEJI.py 的 iter_expanded_targets 逐步投喂逻辑)
 
-    const size_t port_batch_size = 30;
+    if (port_batch_size < 1) port_batch_size = 1;
+    if (port_batch_size > 30) port_batch_size = 30;
     size_t start_port_index = 0;
 
     if (g_config.resume_enabled) {

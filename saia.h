@@ -319,7 +319,7 @@ void saia_cleanup(void);
 void saia_print_banner(void);
 int saia_run_audit(void);
 int saia_print_menu(void);
-int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads);
+int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads, int auto_port_batch_size);
 int saia_config_menu(void);
 int saia_report_menu(void);
 int saia_nodes_menu(void);
