@@ -194,11 +194,86 @@ void saia_print_stats(state_t *state) {
 
 // ==================== 交互式菜单 ====================
 
+static int saia_menu_is_scan_running(void) {
+#ifdef _WIN32
+    return 0;
+#else
+    FILE *pp = popen("screen -list 2>/dev/null", "r");
+    if (!pp) return 0;
+    char line[512];
+    int running = 0;
+    while (fgets(line, sizeof(line), pp)) {
+        if (strstr(line, "saia_scan")) {
+            running = 1;
+            break;
+        }
+    }
+    pclose(pp);
+    return running;
+#endif
+}
+
+static void saia_menu_count_report(uint64_t *xui_found, uint64_t *xui_verified,
+                                   uint64_t *s5_found, uint64_t *s5_verified,
+                                   uint64_t *total_found, uint64_t *total_verified) {
+    if (xui_found) *xui_found = 0;
+    if (xui_verified) *xui_verified = 0;
+    if (s5_found) *s5_found = 0;
+    if (s5_verified) *s5_verified = 0;
+    if (total_found) *total_found = 0;
+    if (total_verified) *total_verified = 0;
+
+    char **lines = NULL;
+    size_t lc = 0;
+    if (file_read_lines(g_config.report_file, &lines, &lc) != 0 || !lines) return;
+    for (size_t i = 0; i < lc; i++) {
+        const char *s = lines[i] ? lines[i] : "";
+        if (strstr(s, "[XUI_FOUND]")) { if (xui_found) (*xui_found)++; if (total_found) (*total_found)++; }
+        if (strstr(s, "[S5_FOUND]"))  { if (s5_found)  (*s5_found)++;  if (total_found) (*total_found)++; }
+        if (strstr(s, "[XUI_VERIFIED]")) { if (xui_verified) (*xui_verified)++; if (total_verified) (*total_verified)++; }
+        if (strstr(s, "[S5_VERIFIED]"))  { if (s5_verified)  (*s5_verified)++;  if (total_verified) (*total_verified)++; }
+        free(lines[i]);
+    }
+    free(lines);
+}
+
 int saia_print_menu(void) {
     const char *bdr = C_BLUE;
     const int inner = 74;
 
     printf("\x1b[H\x1b[J");
+
+    uint64_t xui_found = 0, xui_verified = 0, s5_found = 0, s5_verified = 0, total_found = 0, total_verified = 0;
+    saia_menu_count_report(&xui_found, &xui_verified, &s5_found, &s5_verified, &total_found, &total_verified);
+    int scan_running = saia_menu_is_scan_running();
+
+    char left[8][160];
+    char right[8][160];
+    snprintf(left[0], sizeof(left[0]), "SAIA MASTER CONSOLE v%s", SAIA_VERSION);
+    snprintf(left[1], sizeof(left[1]), "审计任务:%s | 断点续连:%s | Telegram:%s", scan_running ? "RUNNING" : "STOPPED", g_config.resume_enabled ? "ON" : "OFF", g_config.telegram_enabled ? "ON" : "OFF");
+    snprintf(left[2], sizeof(left[2]), "模式:%d | 策略:%d | 线程:%d", g_config.mode, g_config.scan_mode, g_config.threads);
+    snprintf(left[3], sizeof(left[3]), "总发现:%llu | 总验真:%llu", (unsigned long long)total_found, (unsigned long long)total_verified);
+    snprintf(left[4], sizeof(left[4]), "XUI 发现/验真:%llu/%llu", (unsigned long long)xui_found, (unsigned long long)xui_verified);
+    snprintf(left[5], sizeof(left[5]), "S5 发现/验真:%llu/%llu", (unsigned long long)s5_found, (unsigned long long)s5_verified);
+    snprintf(left[6], sizeof(left[6]), "CPU: %.1f%% | MEM_FREE: %.0fMB", g_config.backpressure.current_cpu, g_config.backpressure.current_mem);
+    snprintf(left[7], sizeof(left[7]), "状态: %s", scan_running ? "Running" : "Idle");
+
+    snprintf(right[0], sizeof(right[0]), "MONITOR DETAIL | 运行细节");
+    snprintf(right[1], sizeof(right[1]), "后台会话: %s", scan_running ? "saia_scan RUNNING" : "NOT FOUND");
+    snprintf(right[2], sizeof(right[2]), "工作目录: %s", g_config.base_dir);
+    snprintf(right[3], sizeof(right[3]), "报告文件: %s", g_config.report_file);
+    snprintf(right[4], sizeof(right[4]), "压背: %s", g_config.backpressure.enabled ? "ON" : "OFF");
+    snprintf(right[5], sizeof(right[5]), "限流状态: %s", g_config.backpressure.is_throttled ? "THROTTLED" : "NORMAL");
+    snprintf(right[6], sizeof(right[6]), "连接: %d/%d", g_config.backpressure.current_connections, g_config.backpressure.max_connections);
+    snprintf(right[7], sizeof(right[7]), "每1秒自动刷新，可直接输入菜单号");
+
+    printf("%s┏", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┓  %s┏", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┓%s\n", C_RESET);
+    printf("%s┃ %-*s ┃  %s┃ %-*s ┃%s\n", bdr, inner - 2, left[0], bdr, inner - 2, right[0], C_RESET);
+    printf("%s┣", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┫  %s┣", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┫%s\n", C_RESET);
+    for (int i = 1; i < 8; i++) {
+        printf("%s┃ %-*s ┃  %s┃ %-*s ┃%s\n", bdr, inner - 2, left[i], bdr, inner - 2, right[i], C_RESET);
+    }
+    printf("%s┗", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┛  %s┗", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┛%s\n\n", C_RESET);
 
     /* 上边框 */
     printf("%s┏", bdr);
@@ -287,16 +362,29 @@ int saia_print_menu(void) {
     for (int i = 0; i < inner; i++) printf("━");
     printf("┛" C_RESET "\n");
 
-    printf("%s[ 0 ] 退出程序%s   请输入选项: ", C_DIM, C_RESET);
+    printf("%s[ 0 ] 退出程序%s   请输入选项(回车刷新): ", C_DIM, C_RESET);
     fflush(stdout);
 
-    int choice;
-    if (scanf("%d", &choice) != 1) {
-        while (getchar() != '\n');
-        return -1;
-    }
-    while (getchar() != '\n');
-    return choice;
+    char input[32] = {0};
+#ifdef _WIN32
+    if (!fgets(input, sizeof(input), stdin)) return -1;
+#else
+    fd_set fds;
+    struct timeval tv;
+    FD_ZERO(&fds);
+    FD_SET(0, &fds);
+    tv.tv_sec = 1;
+    tv.tv_usec = 0;
+    int ret = select(1, &fds, NULL, NULL, &tv);
+    if (ret == 0) return -2;
+    if (ret < 0) return -1;
+    if (!fgets(input, sizeof(input), stdin)) return -1;
+#endif
+    if (input[0] == '\n' || input[0] == '\0') return -2;
+    char *end = NULL;
+    long v = strtol(input, &end, 10);
+    if (end == input) return -1;
+    return (int)v;
 }
 
 // ==================== 开始审计 ====================

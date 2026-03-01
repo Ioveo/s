@@ -278,6 +278,9 @@ int saia_cleanup_menu(void) {
 int saia_interactive_mode(void) {
     while (g_running) {
         int choice = saia_print_menu();
+        if (choice == -2) {
+            continue;
+        }
 
         switch (choice) {
             /* ========== 运行 ========== */
@@ -911,87 +914,46 @@ int saia_realtime_monitor(void) {
                                g_config.scan_mode == 2 ? "探索+验真" :
                                g_config.scan_mode == 3 ? "只留极品" : "未知";
 
-        /* 绘制面板 */
         int inner = 74;
         const char *bdr = C_BLUE;
-
-        printf("%s┏", bdr);
-        for (int i = 0; i < inner; i++) printf("━");
-        printf("┓" C_RESET "\n");
-
-        printf("%s┃ %s%sSAIA MONITOR v%s | 实时大屏%-*s%s %s┃" C_RESET "\n",
-               bdr, C_CYAN, C_BOLD, SAIA_VERSION, inner - 35, "", C_RESET, bdr);
-
-        printf("%s┣", bdr);
-        for (int i = 0; i < inner; i++) printf("━");
-        printf("┫" C_RESET "\n");
-
-        /* 状态行 */
-        char line1[256], line2[256], line3[256], line4[256];
-        snprintf(line1, sizeof(line1),
-                 " %s状态:%s %-10s %s|%s %s模式:%s %-8s %s|%s %s深度:%s %-10s %s|%s %s运行:%s %02d:%02d:%02d",
-                 C_WHITE, C_CYAN, status_str,
-                 bdr, C_RESET, C_WHITE, C_CYAN, mode_str,
-                 bdr, C_RESET, C_WHITE, C_CYAN, scan_str,
-                 bdr, C_RESET, C_WHITE, C_CYAN, hours, mins, secs);
-        printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line1, inner - 1, "", bdr);
-
-        snprintf(line2, sizeof(line2),
-                 " %s线程:%s %-6d %s|%s %s后台会话:%s %-8s %s|%s %sTelegram:%s %s",
-                 C_WHITE, C_CYAN, g_config.threads,
-                 bdr, C_RESET, C_WHITE, C_CYAN, scan_running ? "RUNNING" : "STOPPED",
-                 bdr, C_RESET, C_WHITE, C_CYAN,
-                 g_config.telegram_enabled ? "ON" : "OFF");
-        printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line2, inner - 1, "", bdr);
-
-        printf("%s┣", bdr);
-        for (int i = 0; i < inner; i++) printf("─");
-        printf("┫" C_RESET "\n");
-
-        /* 统计行: 实时显示 XUI/S5 的发现与验真 */
         uint64_t xui_found = g_state.xui_found;
         uint64_t xui_verified = g_state.xui_verified;
         uint64_t s5_found = g_state.s5_found;
         uint64_t s5_verified = g_state.s5_verified;
         uint64_t total_found = g_state.total_found;
         uint64_t total_verified = g_state.total_verified;
-
         saia_count_report_stats(g_config.report_file,
                                 &xui_found, &xui_verified,
                                 &s5_found, &s5_verified,
                                 &total_found, &total_verified);
 
-        snprintf(line3, sizeof(line3),
-                 " %s总扫描:%s %-9llu %s|%s %s总发现:%s %-9llu %s|%s %s总验真:%s %-9llu",
-                 C_WHITE, C_GREEN, (unsigned long long)g_state.total_scanned,
-                 bdr, C_RESET, C_WHITE, C_YELLOW, (unsigned long long)total_found,
-                 bdr, C_RESET, C_WHITE, C_HOT, (unsigned long long)total_verified);
-        printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line3, inner - 1, "", bdr);
+        char left[8][180];
+        char right[8][180];
+        snprintf(left[0], sizeof(left[0]), "SAIA MONITOR v%s", SAIA_VERSION);
+        snprintf(left[1], sizeof(left[1]), "状态:%s | 模式:%s", status_str, mode_str);
+        snprintf(left[2], sizeof(left[2]), "策略:%s | 运行:%02d:%02d:%02d", scan_str, hours, mins, secs);
+        snprintf(left[3], sizeof(left[3]), "总发现:%llu | 总验真:%llu", (unsigned long long)total_found, (unsigned long long)total_verified);
+        snprintf(left[4], sizeof(left[4]), "XUI 发现/验真:%llu/%llu", (unsigned long long)xui_found, (unsigned long long)xui_verified);
+        snprintf(left[5], sizeof(left[5]), "S5 发现/验真:%llu/%llu", (unsigned long long)s5_found, (unsigned long long)s5_verified);
+        snprintf(left[6], sizeof(left[6]), "线程:%d | 会话:%s", g_config.threads, scan_running ? "RUNNING" : "STOPPED");
+        snprintf(left[7], sizeof(left[7]), "报告: %s", g_config.report_file);
 
-        snprintf(line4, sizeof(line4),
-                 " %sXUI发现:%s %-8llu %s|%s %sXUI验真:%s %-8llu %s|%s %sS5发现:%s %-8llu %s|%s %sS5验真:%s %-8llu",
-                 C_WHITE, C_YELLOW, (unsigned long long)xui_found,
-                 bdr, C_RESET, C_WHITE, C_HOT, (unsigned long long)xui_verified,
-                 bdr, C_RESET, C_WHITE, C_YELLOW, (unsigned long long)s5_found,
-                 bdr, C_RESET, C_WHITE, C_HOT, (unsigned long long)s5_verified);
-        printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line4, inner - 1, "", bdr);
+        snprintf(right[0], sizeof(right[0]), "MONITOR DETAIL | 运行细节");
+        snprintf(right[1], sizeof(right[1]), "压背: %s", g_config.backpressure.enabled ? "ON" : "OFF");
+        snprintf(right[2], sizeof(right[2]), "CPU: %.1f%% | MEM_FREE: %.0fMB", g_config.backpressure.current_cpu, g_config.backpressure.current_mem);
+        snprintf(right[3], sizeof(right[3]), "连接: %d/%d", g_config.backpressure.current_connections, g_config.backpressure.max_connections);
+        snprintf(right[4], sizeof(right[4]), "限流: %s", g_config.backpressure.is_throttled ? "ON" : "OFF");
+        snprintf(right[5], sizeof(right[5]), "PID: %d", (int)g_state.pid);
+        snprintf(right[6], sizeof(right[6]), "工作目录: %s", g_config.base_dir);
+        snprintf(right[7], sizeof(right[7]), "每2秒刷新，Enter/q返回");
 
-        /* 压背控制 */
-        if (g_config.backpressure.enabled) {
-            char line5[256];
-            snprintf(line5, sizeof(line5),
-                     " %sCPU:%s %.1f%% %s|%s %s内存:%s %.0fMB %s|%s %s连接:%s %d/%d %s|%s %s限流:%s %s",
-                     C_WHITE, C_CYAN, g_config.backpressure.current_cpu,
-                     bdr, C_RESET, C_WHITE, C_CYAN, g_config.backpressure.current_mem,
-                     bdr, C_RESET, C_WHITE, C_CYAN, g_config.backpressure.current_connections, g_config.backpressure.max_connections,
-                     bdr, C_RESET, C_WHITE, g_config.backpressure.is_throttled ? C_RED "是" : C_GREEN "否");
-            printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line5, inner - 1, "", bdr);
+        printf("%s┏", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┓  %s┏", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┓%s\n", C_RESET);
+        printf("%s┃ %-*s ┃  %s┃ %-*s ┃%s\n", bdr, inner - 2, left[0], bdr, inner - 2, right[0], C_RESET);
+        printf("%s┣", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┫  %s┣", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┫%s\n", C_RESET);
+        for (int i = 1; i < 8; i++) {
+            printf("%s┃ %-*s ┃  %s┃ %-*s ┃%s\n", bdr, inner - 2, left[i], bdr, inner - 2, right[i], C_RESET);
         }
-
-        /* 下边框 */
-        printf("%s┗", bdr);
-        for (int i = 0; i < inner; i++) printf("━");
-        printf("┛" C_RESET "\n");
+        printf("%s┗", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┛  %s┗", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┛%s\n", C_RESET);
 
         printf("\n%s按 Enter 返回主菜单 (q 也可返回, 每2秒自动刷新)%s\n", C_DIM, C_RESET);
         fflush(stdout);
