@@ -448,12 +448,23 @@ int saia_interactive_mode(void) {
                     printf("\n>>> 启动前配置 (留空使用当前值)\n");
                     color_reset();
 
+                    printf("模式说明:\n");
+                    printf("  1. XUI专项\n");
+                    printf("  2. S5专项\n");
+                    printf("  3. 深度全能\n");
+                    printf("  4. 验真模式\n");
+
                     printf("模式 [1-4] (当前 %d): ", g_config.mode);
                     fflush(stdout);
                     if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
                         int mode = atoi(input);
                         if (mode >= 1 && mode <= 4) g_config.mode = mode;
                     }
+
+                    printf("扫描策略说明:\n");
+                    printf("  1. 探索\n");
+                    printf("  2. 探索+验真\n");
+                    printf("  3. 只留极品\n");
 
                     printf("扫描策略 [1-3] (当前 %d): ", g_config.scan_mode);
                     fflush(stdout);
