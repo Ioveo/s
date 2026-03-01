@@ -202,33 +202,200 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
 
 // ==================== 验证逻辑: XUI ====================
 
-int verify_xui(const char *ip, uint16_t port, const char *user, const char *pass, int timeout_ms) {
-    char url[256];
-    snprintf(url, sizeof(url), "http://%s:%d/login", ip, port);
-    
-    char data[512];
-    snprintf(data, sizeof(data), "username=%s&password=%s", user, pass);
-    
-    http_response_t *res = http_post(url, data, timeout_ms);
+static int contains_ci(const char *haystack, const char *needle) {
+    if (!haystack || !needle || !*needle) return 0;
+    size_t nlen = strlen(needle);
+    for (const char *p = haystack; *p; p++) {
+        size_t i = 0;
+        while (i < nlen && p[i] && tolower((unsigned char)p[i]) == tolower((unsigned char)needle[i])) {
+            i++;
+        }
+        if (i == nlen) return 1;
+    }
+    return 0;
+}
+
+static void xui_build_url(char *out, size_t out_sz, const char *ip, uint16_t port, const char *path, int use_ssl) {
+    snprintf(out, out_sz, "%s://%s:%d%s", use_ssl ? "https" : "http", ip, (int)port, path && *path ? path : "/");
+}
+
+static int xui_extract_location_path(const char *headers, char *out, size_t out_sz) {
+    if (!headers || !out || out_sz == 0) return 0;
+    out[0] = '\0';
+
+    const char *p = headers;
+    while (*p) {
+        const char *line_end = strstr(p, "\r\n");
+        size_t len = line_end ? (size_t)(line_end - p) : strlen(p);
+        if (len >= 9 && (tolower((unsigned char)p[0]) == 'l')) {
+            if ((len >= 9) &&
+                tolower((unsigned char)p[0]) == 'l' &&
+                tolower((unsigned char)p[1]) == 'o' &&
+                tolower((unsigned char)p[2]) == 'c' &&
+                tolower((unsigned char)p[3]) == 'a' &&
+                tolower((unsigned char)p[4]) == 't' &&
+                tolower((unsigned char)p[5]) == 'i' &&
+                tolower((unsigned char)p[6]) == 'o' &&
+                tolower((unsigned char)p[7]) == 'n' &&
+                p[8] == ':') {
+                const char *v = p + 9;
+                while (*v == ' ' || *v == '\t') v++;
+                if (*v == '/') {
+                    size_t i = 0;
+                    while (i + 1 < out_sz && v[i] && v + i < p + len && v[i] != '\r' && v[i] != '\n') {
+                        out[i] = v[i];
+                        i++;
+                    }
+                    out[i] = '\0';
+                    return (i > 0);
+                }
+            }
+        }
+        if (!line_end) break;
+        p = line_end + 2;
+    }
+    return 0;
+}
+
+static int xui_match_page_fingerprint(const http_response_t *res) {
     if (!res) return 0;
-    
-    int success = 0;
-    
-    // 检查响应
-    if (res->status_code == 200) {
-        // 检查是否有 success: true 或者 Set-Cookie 即可认为是有效面板
-        if (res->body && strstr(res->body, "\"success\":true")) {
-            success = 1;
-        } else if (res->headers && strstr(res->headers, "Set-Cookie")) {
-            success = 1;
-        } else if (res->body && strstr(res->body, "X-UI")) {
-            // 有些旧版本即使返回了200，账号密码不对也能看到登录页特征，需要谨慎
-            // 但如果带Set-Cookie基本确真
+    const char *h = res->headers ? res->headers : "";
+    const char *b = res->body ? res->body : "";
+
+    if (contains_ci(h, "x-ui") || contains_ci(b, "x-ui") ||
+        contains_ci(h, "3x-ui") || contains_ci(b, "3x-ui") ||
+        contains_ci(h, "/xui") || contains_ci(b, "/xui")) {
+        return 1;
+    }
+
+    if (contains_ci(h, "/login") || contains_ci(b, "/login")) {
+        if (contains_ci(h, "username") || contains_ci(b, "username") ||
+            contains_ci(h, "password") || contains_ci(b, "password") ||
+            contains_ci(h, "signin") || contains_ci(b, "signin")) {
+            return 1;
         }
     }
-    
-    http_response_free(res);
-    return success;
+
+    if ((contains_ci(h, "/assets/ant-design-vue/antd.min.css") || contains_ci(b, "/assets/ant-design-vue/antd.min.css")) &&
+        ((contains_ci(h, "/assets/css/custom.min.css") || contains_ci(b, "/assets/css/custom.min.css")) ||
+         (contains_ci(h, "/assets/element-ui/theme-chalk/display.css") || contains_ci(b, "/assets/element-ui/theme-chalk/display.css")))) {
+        return 1;
+    }
+
+    if ((contains_ci(h, "-welcome</title>") || contains_ci(b, "-welcome</title>")) &&
+        (contains_ci(h, "/assets/js/") || contains_ci(b, "/assets/js/"))) {
+        return 1;
+    }
+
+    return 0;
+}
+
+static int xui_auth_success(const http_response_t *res) {
+    if (!res) return 0;
+    const char *h = res->headers ? res->headers : "";
+    const char *b = res->body ? res->body : "";
+
+    if (contains_ci(b, "\"success\":true") || contains_ci(b, "\"success\": true")) return 1;
+    if (contains_ci(h, "set-cookie: session=") || contains_ci(h, "set-cookie:session=")) return 1;
+    if (contains_ci(h, "set-cookie: x-ui") || contains_ci(h, "set-cookie:x-ui")) return 1;
+    if (res->status_code == 302 && contains_ci(h, "location: /panel")) return 1;
+
+    return 0;
+}
+
+int verify_xui(const char *ip, uint16_t port, const char *user, const char *pass, int timeout_ms) {
+    if (!ip || !*ip || !user || !pass) return 0;
+
+    typedef struct { char path[96]; int ssl; } probe_t;
+    typedef struct { char login_path[96]; int ssl; } candidate_t;
+
+    probe_t probes[24];
+    size_t probe_count = 0;
+    candidate_t candidates[24];
+    size_t cand_count = 0;
+
+    probes[probe_count++] = (probe_t){"/", 0};
+    probes[probe_count++] = (probe_t){"/login", 0};
+    probes[probe_count++] = (probe_t){"/", 1};
+    probes[probe_count++] = (probe_t){"/login", 1};
+
+    for (size_t i = 0; i < probe_count && i < 24; i++) {
+        char url[320];
+        xui_build_url(url, sizeof(url), ip, port, probes[i].path, probes[i].ssl);
+        http_response_t *res = http_get(url, timeout_ms);
+        if (!res) continue;
+
+        char loc_path[96];
+        if (xui_extract_location_path(res->headers, loc_path, sizeof(loc_path))) {
+            int exists = 0;
+            for (size_t k = 0; k < probe_count; k++) {
+                if (probes[k].ssl == probes[i].ssl && strcmp(probes[k].path, loc_path) == 0) {
+                    exists = 1;
+                    break;
+                }
+            }
+            if (!exists && probe_count < 24) {
+                snprintf(probes[probe_count].path, sizeof(probes[probe_count].path), "%s", loc_path);
+                probes[probe_count].ssl = probes[i].ssl;
+                probe_count++;
+            }
+        }
+
+        if (xui_match_page_fingerprint(res)) {
+            char login_path[96];
+            if (contains_ci(probes[i].path, "login")) {
+                snprintf(login_path, sizeof(login_path), "%s", probes[i].path);
+            } else {
+                if (strcmp(probes[i].path, "/") == 0) {
+                    snprintf(login_path, sizeof(login_path), "/login");
+                } else {
+                    snprintf(login_path, sizeof(login_path), "%s/login", probes[i].path);
+                }
+            }
+
+            int exists = 0;
+            for (size_t c = 0; c < cand_count; c++) {
+                if (candidates[c].ssl == probes[i].ssl && strcmp(candidates[c].login_path, login_path) == 0) {
+                    exists = 1;
+                    break;
+                }
+            }
+            if (!exists && cand_count < 24) {
+                snprintf(candidates[cand_count].login_path, sizeof(candidates[cand_count].login_path), "%s", login_path);
+                candidates[cand_count].ssl = probes[i].ssl;
+                cand_count++;
+            }
+        }
+
+        http_response_free(res);
+    }
+
+    if (cand_count == 0) {
+        const char *fallbacks[] = {"/login", "/xui/login", "/auth/login"};
+        for (int ssl = 0; ssl <= 1; ssl++) {
+            for (size_t j = 0; j < sizeof(fallbacks)/sizeof(fallbacks[0]); j++) {
+                if (cand_count >= 24) break;
+                snprintf(candidates[cand_count].login_path, sizeof(candidates[cand_count].login_path), "%s", fallbacks[j]);
+                candidates[cand_count].ssl = ssl;
+                cand_count++;
+            }
+        }
+    }
+
+    char data[768];
+    snprintf(data, sizeof(data), "username=%s&password=%s", user, pass);
+
+    for (size_t c = 0; c < cand_count; c++) {
+        char login_url[320];
+        xui_build_url(login_url, sizeof(login_url), ip, port, candidates[c].login_path, candidates[c].ssl);
+        http_response_t *res = http_post(login_url, data, timeout_ms);
+        if (!res) continue;
+        int ok = xui_auth_success(res);
+        http_response_free(res);
+        if (ok) return 1;
+    }
+
+    return 0;
 }
 
 // ==================== 多线程调度 ====================
@@ -302,95 +469,32 @@ static void scanner_report_found_open(const worker_arg_t *task) {
     MUTEX_UNLOCK(lock_file);
 }
 
-static int contains_ci(const char *haystack, const char *needle) {
-    if (!haystack || !needle || !*needle) return 0;
-    size_t nlen = strlen(needle);
-    for (const char *p = haystack; *p; p++) {
-        size_t i = 0;
-        while (i < nlen && p[i] && tolower((unsigned char)p[i]) == tolower((unsigned char)needle[i])) {
-            i++;
+static int xui_has_required_fingerprint(const char *ip, uint16_t port, int timeout_ms) {
+    const char *paths[] = {"/", "/login"};
+    for (int ssl = 0; ssl <= 1; ssl++) {
+        for (size_t i = 0; i < sizeof(paths)/sizeof(paths[0]); i++) {
+            char url[320];
+            xui_build_url(url, sizeof(url), ip, port, paths[i], ssl);
+            http_response_t *res = http_get(url, timeout_ms);
+            if (!res) continue;
+            int ok = xui_match_page_fingerprint(res);
+            if (!ok) {
+                char loc_path[96];
+                if (xui_extract_location_path(res->headers, loc_path, sizeof(loc_path))) {
+                    char u2[320];
+                    xui_build_url(u2, sizeof(u2), ip, port, loc_path, ssl);
+                    http_response_t *res2 = http_get(u2, timeout_ms);
+                    if (res2) {
+                        ok = xui_match_page_fingerprint(res2);
+                        http_response_free(res2);
+                    }
+                }
+            }
+            http_response_free(res);
+            if (ok) return 1;
         }
-        if (i == nlen) return 1;
     }
     return 0;
-}
-
-static int xui_has_required_fingerprint(const char *ip, uint16_t port, int timeout_ms) {
-    char url_login[256];
-    char url_xui[256];
-    snprintf(url_login, sizeof(url_login), "http://%s:%d/login", ip, port);
-    snprintf(url_xui, sizeof(url_xui), "http://%s:%d/xui/", ip, port);
-
-    int has_form_userpass = 0;
-    int has_header_gin = 0;
-    int has_path_xui = 0;
-    int has_session_cookie = 0;
-    int has_json_api = 0;
-    int has_login_failed_json = 0;
-
-    http_response_t *r_login = http_get(url_login, timeout_ms);
-    if (r_login) {
-        if (r_login->headers) {
-            if (contains_ci(r_login->headers, "server: gin") || contains_ci(r_login->headers, " gin")) {
-                has_header_gin = 1;
-            }
-            if (contains_ci(r_login->headers, "set-cookie") && contains_ci(r_login->headers, "session")) {
-                has_session_cookie = 1;
-            }
-            if (contains_ci(r_login->headers, "application/json")) {
-                has_json_api = 1;
-            }
-            if (contains_ci(r_login->headers, "/xui/")) {
-                has_path_xui = 1;
-            }
-        }
-        if (r_login->body) {
-            if ((contains_ci(r_login->body, "username") || contains_ci(r_login->body, "user")) &&
-                (contains_ci(r_login->body, "password") || contains_ci(r_login->body, "pass"))) {
-                has_form_userpass = 1;
-            }
-            if (contains_ci(r_login->body, "/xui/")) {
-                has_path_xui = 1;
-            }
-            if (contains_ci(r_login->body, "json") || contains_ci(r_login->body, "\"success\"")) {
-                has_json_api = 1;
-            }
-        }
-        http_response_free(r_login);
-    }
-
-    http_response_t *r_xui = http_get(url_xui, timeout_ms);
-    if (r_xui) {
-        if (r_xui->headers && contains_ci(r_xui->headers, "server: gin")) has_header_gin = 1;
-        if (r_xui->headers && contains_ci(r_xui->headers, "set-cookie") && contains_ci(r_xui->headers, "session")) has_session_cookie = 1;
-        if (r_xui->headers && contains_ci(r_xui->headers, "/xui/")) has_path_xui = 1;
-        if (r_xui->body && contains_ci(r_xui->body, "/xui/")) has_path_xui = 1;
-        http_response_free(r_xui);
-    }
-
-    http_response_t *r_bad = http_post(url_login, "username=saia_probe&password=saia_probe_bad", timeout_ms);
-    if (r_bad) {
-        if (r_bad->headers && contains_ci(r_bad->headers, "application/json")) {
-            has_json_api = 1;
-        }
-        if (r_bad->body) {
-            if (contains_ci(r_bad->body, "\"success\"")) {
-                has_json_api = 1;
-            }
-            if ((contains_ci(r_bad->body, "\"success\":false") || contains_ci(r_bad->body, "\"success\": false") ||
-                 contains_ci(r_bad->body, "login-failed") || contains_ci(r_bad->body, "failed")) &&
-                (contains_ci(r_bad->body, "json") || contains_ci(r_bad->body, "\"success\""))) {
-                has_login_failed_json = 1;
-            }
-        }
-        http_response_free(r_bad);
-    }
-
-    if (!has_header_gin) return 0;
-    if (!(has_form_userpass || has_path_xui)) return 0;
-    if (!(has_json_api || has_login_failed_json)) return 0;
-
-    return 1;
 }
 
 static int s5_has_required_fingerprint(const char *ip, uint16_t port, int timeout_ms, int *method_out) {
