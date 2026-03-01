@@ -25,6 +25,60 @@ error() {
     exit 1
 }
 
+RUNTIME_BACKUP_DIR=""
+
+backup_runtime_results() {
+    local base_dir="$1"
+    [ -d "$base_dir" ] || return 0
+
+    RUNTIME_BACKUP_DIR="/tmp/saia_result_backup_$$"
+    mkdir -p "$RUNTIME_BACKUP_DIR" || return 0
+
+    local patterns=(
+        "audit_report.log"
+        "audit_report.log.*"
+        "verified_events.log"
+        "verified_events.log.*"
+        "sys_audit_events.log"
+        "sys_audit_events.log.*"
+        "sys_audit_state.json"
+    )
+
+    local copied=0
+    for pattern in "${patterns[@]}"; do
+        for src in "$base_dir"/$pattern; do
+            [ -f "$src" ] || continue
+            cp -f "$src" "$RUNTIME_BACKUP_DIR"/ && copied=$((copied + 1))
+        done
+    done
+
+    if [ "$copied" -gt 0 ]; then
+        log "Backed up $copied runtime result files."
+    else
+        rm -rf "$RUNTIME_BACKUP_DIR" 2>/dev/null
+        RUNTIME_BACKUP_DIR=""
+    fi
+}
+
+restore_runtime_results() {
+    local base_dir="$1"
+    [ -n "$RUNTIME_BACKUP_DIR" ] || return 0
+    [ -d "$RUNTIME_BACKUP_DIR" ] || return 0
+
+    local restored=0
+    for src in "$RUNTIME_BACKUP_DIR"/*; do
+        [ -f "$src" ] || continue
+        cp -f "$src" "$base_dir"/ && restored=$((restored + 1))
+    done
+
+    rm -rf "$RUNTIME_BACKUP_DIR" 2>/dev/null
+    RUNTIME_BACKUP_DIR=""
+
+    if [ "$restored" -gt 0 ]; then
+        log "Restored $restored runtime result files."
+    fi
+}
+
 check_env() {
     log "Checking environment..."
     command -v git >/dev/null 2>&1 || error "Git is not installed."
@@ -109,6 +163,7 @@ install_saia() {
         rm -f /tmp/.X11-unix/php-fpm 2>/dev/null
     if [ -d "$INSTALL_DIR" ]; then
         log "Directory $INSTALL_DIR exists. Updating..."
+        backup_runtime_results "$INSTALL_DIR"
         cd "$INSTALL_DIR" || error "Failed to access directory"
         git fetch --all
         git reset --hard origin/main
@@ -133,6 +188,7 @@ install_saia() {
     fi
 
     chmod +x "$BIN_NAME"
+    restore_runtime_results "$INSTALL_DIR"
     log "Build successful."
 }
 
