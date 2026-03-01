@@ -360,7 +360,7 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     // 线程数
 
-    printf("\n并发线程数 [50-2000] (默认 200): ");
+    printf("\n并发线程数 [50-300] (默认 200): ");
     fflush(stdout);
     threads = 200;
     if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
@@ -369,7 +369,7 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     if (threads < MIN_CONCURRENT_CONNECTIONS) threads = MIN_CONCURRENT_CONNECTIONS;
 
-    if (threads > MAX_THREADS) threads = MAX_THREADS;
+    if (threads > 300) threads = 300;
 
     // 端口
     /* 根据已选模式显示默认端口提示 */
@@ -647,13 +647,14 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     // 流式展开 IP 段并投喂线程池 (对齐 DEJI.py 的 iter_expanded_targets 逐步投喂逻辑)
 
-    if (port_count > 5) {
-        for (size_t i = 0; i < port_count && g_running && !g_reload; i += 5) {
+    const size_t port_batch_size = 30;
+    if (port_count > port_batch_size) {
+        for (size_t i = 0; i < port_count && g_running && !g_reload; i += port_batch_size) {
             size_t chunk = port_count - i;
-            if (chunk > 5) chunk = 5;
+            if (chunk > port_batch_size) chunk = port_batch_size;
             printf("\n%s[端口分批]%s 第 %zu 批: 端口 %zu-%zu / %zu\n",
                    C_CYAN, C_RESET,
-                   (i / 5) + 1,
+                   (i / port_batch_size) + 1,
                    i + 1,
                    i + chunk,
                    port_count);

@@ -223,8 +223,19 @@ int saia_interactive_mode(void) {
                 printf("退出程序\n");
                 break;
             case 1:
-                /* 对齐主实现：进入完整审计配置流程（含默认端口/压背等子菜单） */
-                saia_run_audit_internal(0, 0, 0);
+                if (g_audit_running) {
+                    printf("\n>>> 审计任务已在运行，请先停止或等待完成\n");
+                    break;
+                }
+                if (g_config.threads < MIN_CONCURRENT_CONNECTIONS) g_config.threads = MIN_CONCURRENT_CONNECTIONS;
+                if (g_config.threads > 300) g_config.threads = 300;
+                if (saia_start_audit_async(g_config.mode, g_config.scan_mode, g_config.threads) != 0) {
+                    printf("\n>>> 启动审计任务失败\n");
+                    break;
+                }
+                printf("\n>>> 审计任务已在后台启动，可继续在主菜单操作\n");
+                printf(">>> 当前配置: mode=%d, scan=%d, threads=%d\n",
+                       g_config.mode, g_config.scan_mode, g_config.threads);
                 break;
             case 2:
                 if (!g_audit_running) {
