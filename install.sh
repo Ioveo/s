@@ -230,13 +230,22 @@ case "\$CMD" in
         ;;
     stop)
         screen -S "\$SCREEN_NAME" -X quit
+        screen -S "saia_scan" -X quit 2>/dev/null
         echo "Service stopped."
         ;;
     restart)
         \$0 stop; sleep 1; \$0 start
         ;;
     status)
-        screen -list | grep -q "\$SCREEN_NAME" && echo "RUNNING (Ultimate Stealth: php-fpm)" || echo "STOPPED"
+        if screen -list | grep -q "\$SCREEN_NAME"; then
+            if screen -list | grep -q "saia_scan"; then
+                echo "RUNNING (console+scan)"
+            else
+                echo "RUNNING (console only)"
+            fi
+        else
+            echo "STOPPED"
+        fi
         ;;
     doctor)
         echo "[doctor] manager: $INSTALL_DIR/saia_manager.sh"
@@ -253,6 +262,7 @@ case "\$CMD" in
             echo "[doctor] stealth exists: no"
         fi
         screen -list 2>/dev/null | grep "\$SCREEN_NAME" || echo "[doctor] screen session: not found"
+        screen -list 2>/dev/null | grep "saia_scan" || echo "[doctor] scan session: not found"
         ;;
     attach)
         screen -r "\$SCREEN_NAME"

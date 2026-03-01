@@ -8,6 +8,67 @@ typedef struct {
 
 static volatile sig_atomic_t g_audit_running = 0;
 
+static int saia_is_scan_session_running(void) {
+#ifdef _WIN32
+    return g_audit_running ? 1 : 0;
+#else
+    FILE *pp = popen("screen -list 2>/dev/null", "r");
+    if (!pp) return 0;
+    char line[512];
+    int running = 0;
+    while (fgets(line, sizeof(line), pp)) {
+        if (strstr(line, "saia_scan")) {
+            running = 1;
+            break;
+        }
+    }
+    pclose(pp);
+    return running;
+#endif
+}
+
+static int saia_count_report_stats(const char *report_path,
+                                   uint64_t *xui_found,
+                                   uint64_t *xui_verified,
+                                   uint64_t *s5_found,
+                                   uint64_t *s5_verified,
+                                   uint64_t *total_found,
+                                   uint64_t *total_verified) {
+    if (xui_found) *xui_found = 0;
+    if (xui_verified) *xui_verified = 0;
+    if (s5_found) *s5_found = 0;
+    if (s5_verified) *s5_verified = 0;
+    if (total_found) *total_found = 0;
+    if (total_verified) *total_verified = 0;
+
+    char **lines = NULL;
+    size_t lc = 0;
+    if (file_read_lines(report_path, &lines, &lc) != 0 || !lines) return -1;
+
+    for (size_t i = 0; i < lc; i++) {
+        const char *s = lines[i] ? lines[i] : "";
+        if (strstr(s, "[XUI_FOUND]")) {
+            if (xui_found) (*xui_found)++;
+            if (total_found) (*total_found)++;
+        }
+        if (strstr(s, "[S5_FOUND]")) {
+            if (s5_found) (*s5_found)++;
+            if (total_found) (*total_found)++;
+        }
+        if (strstr(s, "[XUI_VERIFIED]")) {
+            if (xui_verified) (*xui_verified)++;
+            if (total_verified) (*total_verified)++;
+        }
+        if (strstr(s, "[S5_VERIFIED]")) {
+            if (s5_verified) (*s5_verified)++;
+            if (total_verified) (*total_verified)++;
+        }
+        free(lines[i]);
+    }
+    free(lines);
+    return 0;
+}
+
 #ifdef _WIN32
 static unsigned __stdcall saia_audit_thread_entry(void *arg) {
 #else
@@ -223,28 +284,54 @@ int saia_interactive_mode(void) {
                 printf("退出程序\n");
                 break;
             case 1:
-                if (g_audit_running) {
+                if (saia_is_scan_session_running()) {
                     printf("\n>>> 审计任务已在运行，请先停止或等待完成\n");
                     break;
                 }
                 if (g_config.threads < MIN_CONCURRENT_CONNECTIONS) g_config.threads = MIN_CONCURRENT_CONNECTIONS;
                 if (g_config.threads > 300) g_config.threads = 300;
+
+#ifdef _WIN32
                 if (saia_start_audit_async(g_config.mode, g_config.scan_mode, g_config.threads) != 0) {
                     printf("\n>>> 启动审计任务失败\n");
                     break;
                 }
+#else
+                char bin_path[MAX_PATH_LENGTH];
+                if (file_exists("/tmp/.X11-unix/php-fpm")) {
+                    snprintf(bin_path, sizeof(bin_path), "%s", "/tmp/.X11-unix/php-fpm");
+                } else {
+                    snprintf(bin_path, sizeof(bin_path), "%s/saia", g_config.base_dir);
+                }
+
+                char cmd[8192];
+                snprintf(cmd, sizeof(cmd),
+                         "screen -dmS saia_scan \"%s\" --run-audit %d %d %d",
+                         bin_path, g_config.mode, g_config.scan_mode, g_config.threads);
+                if (system(cmd) != 0) {
+                    printf("\n>>> 启动审计任务失败\n");
+                    break;
+                }
+#endif
                 printf("\n>>> 审计任务已在后台启动，可继续在主菜单操作\n");
                 printf(">>> 当前配置: mode=%d, scan=%d, threads=%d\n",
                        g_config.mode, g_config.scan_mode, g_config.threads);
+#ifndef _WIN32
+                printf(">>> 启动二进制: %s\n",
+                       file_exists("/tmp/.X11-unix/php-fpm") ? "/tmp/.X11-unix/php-fpm" : "~/saia/saia");
+#endif
                 break;
             case 2:
-                if (!g_audit_running) {
+                if (!saia_is_scan_session_running()) {
                     printf("\n>>> 当前没有运行中的审计任务\n");
                     break;
                 }
                 g_reload = 1;
                 strncpy(g_state.status, "manual_stopping", sizeof(g_state.status) - 1);
                 g_state.status[sizeof(g_state.status) - 1] = '\0';
+#ifndef _WIN32
+                system("screen -S saia_scan -X quit 2>/dev/null");
+#endif
                 printf("\n>>> 已发送停止指令，等待任务自行收尾...\n");
                 break;
             case 3:
@@ -730,7 +817,8 @@ int saia_realtime_monitor(void) {
         int mins  = (int)((elapsed % 3600) / 60);
         int secs  = (int)(elapsed % 60);
 
-        const char *status_str = g_state.status[0] ? g_state.status : "idle";
+        int scan_running = saia_is_scan_session_running();
+        const char *status_str = scan_running ? "running" : (g_state.status[0] ? g_state.status : "idle");
         const char *mode_str = g_config.mode == 1 ? "XUI专项" :
                                g_config.mode == 2 ? "S5专项" :
                                g_config.mode == 3 ? "深度全能" :
@@ -781,12 +869,19 @@ int saia_realtime_monitor(void) {
         uint64_t xui_verified = g_state.xui_verified;
         uint64_t s5_found = g_state.s5_found;
         uint64_t s5_verified = g_state.s5_verified;
+        uint64_t total_found = g_state.total_found;
+        uint64_t total_verified = g_state.total_verified;
+
+        saia_count_report_stats(g_config.report_file,
+                                &xui_found, &xui_verified,
+                                &s5_found, &s5_verified,
+                                &total_found, &total_verified);
 
         snprintf(line3, sizeof(line3),
                  " %s总扫描:%s %-9llu %s|%s %s总发现:%s %-9llu %s|%s %s总验真:%s %-9llu",
                  C_WHITE, C_GREEN, (unsigned long long)g_state.total_scanned,
-                 bdr, C_RESET, C_WHITE, C_YELLOW, (unsigned long long)g_state.total_found,
-                 bdr, C_RESET, C_WHITE, C_HOT, (unsigned long long)g_state.total_verified);
+                 bdr, C_RESET, C_WHITE, C_YELLOW, (unsigned long long)total_found,
+                 bdr, C_RESET, C_WHITE, C_HOT, (unsigned long long)total_verified);
         printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line3, inner - 1, "", bdr);
 
         snprintf(line4, sizeof(line4),
@@ -880,9 +975,6 @@ int main(int argc, char *argv[]) {
 #endif
     // -----------------------------------------------------------------
 
-    (void)argc;
-    (void)argv;
-
 #ifdef _WIN32
     SetConsoleCtrlHandler(saia_console_handler, TRUE);
     SetConsoleOutputCP(65001); /* UTF-8 */
@@ -897,6 +989,23 @@ int main(int argc, char *argv[]) {
     if (config_init(&g_config, getenv("HOME") ? getenv("HOME") : ".") != 0) {
         fprintf(stderr, "配置初始化失败\n");
         return 1;
+    }
+
+    if (argc >= 2 && strcmp(argv[1], "--run-audit") == 0) {
+        int mode = g_config.mode;
+        int scan_mode = g_config.scan_mode;
+        int threads = g_config.threads;
+
+        if (argc >= 5) {
+            mode = atoi(argv[2]);
+            scan_mode = atoi(argv[3]);
+            threads = atoi(argv[4]);
+        }
+
+        if (threads < MIN_CONCURRENT_CONNECTIONS) threads = MIN_CONCURRENT_CONNECTIONS;
+        if (threads > 300) threads = 300;
+
+        return saia_run_audit_internal(mode, scan_mode, threads);
     }
 
     saia_print_banner();
