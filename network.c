@@ -35,6 +35,20 @@ int socket_create(int ipv6) {
         return -1;
     }
     
+    /* 立即释放连接，减少 TIME_WAIT/CLOSE_WAIT 累积 */
+    struct linger sl;
+    sl.l_onoff = 1;
+    sl.l_linger = 0;
+    setsockopt(fd, SOL_SOCKET, SO_LINGER, (char *)&sl, sizeof(sl));
+
+    /* 允许地址复用 */
+    int reuse = 1;
+    setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (char *)&reuse, sizeof(reuse));
+
+#ifdef SO_REUSEPORT
+    setsockopt(fd, SOL_SOCKET, SO_REUSEPORT, (char *)&reuse, sizeof(reuse));
+#endif
+
     return fd;
 }
 

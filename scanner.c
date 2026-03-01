@@ -412,6 +412,53 @@ typedef struct {
     int s5_method;
 } worker_arg_t;
 
+typedef struct worker_arg_pool_s {
+    worker_arg_t item;
+    struct worker_arg_pool_s *next;
+} worker_arg_pool_t;
+
+static worker_arg_pool_t *g_worker_arg_pool = NULL;
+static int g_worker_arg_pool_size = 0;
+#define WORKER_ARG_POOL_MAX 16384
+
+static worker_arg_t *worker_arg_acquire(void) {
+    worker_arg_t *out = NULL;
+    MUTEX_LOCK(lock_stats);
+    if (g_worker_arg_pool) {
+        worker_arg_pool_t *n = g_worker_arg_pool;
+        g_worker_arg_pool = n->next;
+        if (g_worker_arg_pool_size > 0) g_worker_arg_pool_size--;
+        out = &n->item;
+    }
+    MUTEX_UNLOCK(lock_stats);
+
+    if (!out) {
+        worker_arg_pool_t *n = (worker_arg_pool_t *)calloc(1, sizeof(worker_arg_pool_t));
+        if (!n) return NULL;
+        out = &n->item;
+    }
+
+    memset(out, 0, sizeof(*out));
+    return out;
+}
+
+static void worker_arg_release(worker_arg_t *arg) {
+    if (!arg) return;
+    worker_arg_pool_t *node = (worker_arg_pool_t *)arg;
+
+    MUTEX_LOCK(lock_stats);
+    if (g_worker_arg_pool_size < WORKER_ARG_POOL_MAX) {
+        node->next = g_worker_arg_pool;
+        g_worker_arg_pool = node;
+        g_worker_arg_pool_size++;
+        MUTEX_UNLOCK(lock_stats);
+        return;
+    }
+    MUTEX_UNLOCK(lock_stats);
+
+    free(node);
+}
+
 static void scanner_report_found_open(const worker_arg_t *task) {
     if (!task) return;
     char result_line[1024];
@@ -828,7 +875,7 @@ void *worker_thread(void *arg) {
     
     if (socket_connect_timeout(fd, (struct sockaddr*)&addr, sizeof(addr), 1000) != 0) {
         socket_close(fd);
-        free(task);
+        worker_arg_release(task);
         
         MUTEX_LOCK(lock_stats);
         running_threads--;
@@ -900,7 +947,7 @@ void *worker_thread(void *arg) {
     }
 
     
-    free(task);
+    worker_arg_release(task);
     
     MUTEX_LOCK(lock_stats);
     running_threads--;
@@ -1121,7 +1168,7 @@ static int feed_single_target(const char *ip, void *userdata) {
         }
         if (!g_running || g_reload) break;
 
-        worker_arg_t *arg = (worker_arg_t *)malloc(sizeof(worker_arg_t));
+        worker_arg_t *arg = worker_arg_acquire();
         if (!arg) continue;
         strncpy(arg->ip, ip, sizeof(arg->ip) - 1);
         arg->ip[sizeof(arg->ip) - 1] = '\0';
@@ -1137,13 +1184,17 @@ static int feed_single_target(const char *ip, void *userdata) {
         running_threads++;
         MUTEX_UNLOCK(lock_stats);
 
-        #ifdef _WIN32
+#ifdef _WIN32
         _beginthreadex(NULL, 0, worker_thread, arg, 0, NULL);
-        #else
+#else
         pthread_t tid;
         pthread_create(&tid, NULL, worker_thread, arg);
         pthread_detach(tid);
-        #endif
+#endif
+
+        if ((running_threads % 10) == 0) {
+            saia_sleep(5);
+        }
     }
 
     ctx->fed_count++;
@@ -1336,7 +1387,8 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
         
         // 创建任务
         for (size_t p = 0; p < port_count && g_running && !g_reload; p++) {
-            worker_arg_t *arg = (worker_arg_t *)malloc(sizeof(worker_arg_t));
+            worker_arg_t *arg = worker_arg_acquire();
+            if (!arg) continue;
             strncpy(arg->ip, nodes[node_idx], sizeof(arg->ip) - 1);
             arg->port = ports[p];
             arg->creds = creds;
@@ -1350,13 +1402,17 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
             running_threads++;
             MUTEX_UNLOCK(lock_stats);
             
-            #ifdef _WIN32
+#ifdef _WIN32
             _beginthreadex(NULL, 0, worker_thread, arg, 0, NULL);
-            #else
+#else
             pthread_t tid;
             pthread_create(&tid, NULL, worker_thread, arg);
             pthread_detach(tid);
-            #endif
+#endif
+
+            if ((running_threads % 10) == 0) {
+                saia_sleep(5);
+            }
         }
         
         node_idx++;
@@ -1389,16 +1445,42 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
     printf("\n扫描结束\n");
 }
 
+static size_t scanner_estimate_targets_from_file(const char *targets_file) {
+    if (!targets_file || !*targets_file) return 0;
+    FILE *fp = fopen(targets_file, "rb");
+    if (!fp) return 0;
+
+    size_t est_total = 0;
+    char line[4096];
+    while (fgets(line, sizeof(line), fp)) {
+        if (!line[0] || line[0] == '#') continue;
+        char line_copy[4096];
+        strncpy(line_copy, line, sizeof(line_copy) - 1);
+        line_copy[sizeof(line_copy) - 1] = '\0';
+        char *saveptr = NULL;
+        for (char *tok = SAIA_STRTOK_R(line_copy, " \t\r\n", &saveptr);
+             tok;
+             tok = SAIA_STRTOK_R(NULL, " \t\r\n", &saveptr)) {
+            if (*tok == '#') break;
+            est_total += estimate_expanded_count(tok);
+        }
+    }
+    fclose(fp);
+    return est_total;
+}
+
 /*
- * scanner_start_streaming: 流式扫描 — 接受原始未展开的行列表，
- * 按空白拆分 target 后逐个调用 iterate_expanded_targets 直接产出单个 IP,
- * 产出即投喂线程池，不再构建整段 IP 的大数组。
- * 对应 DEJI.py 的 iter_expanded_targets + asyncio.Queue 机制。
+ * scanner_start_streaming: 流式扫描 — 直接读取目标文件，按行渐进展开并投喂。
  */
-void scanner_start_streaming(char **raw_lines, size_t raw_count,
+void scanner_start_streaming(const char *targets_file,
                              credential_t *creds, size_t cred_count,
                              uint16_t *ports, size_t port_count) {
     init_locks();
+
+    if (!targets_file || !*targets_file) {
+        printf("[错误] 目标文件为空，无法开始扫描\n");
+        return;
+    }
 
     MUTEX_LOCK(lock_stats);
     while (verify_head) {
@@ -1413,22 +1495,8 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
     snprintf(progress_token, sizeof(progress_token), "-");
     MUTEX_UNLOCK(lock_stats);
 
-    /* 快速估算总目标数 — 不做真正展开，只算数目 */
-    size_t est_total = 0;
-    for (size_t i = 0; i < raw_count; i++) {
-        if (!raw_lines[i] || !*raw_lines[i] || *raw_lines[i] == '#') continue;
-
-        char line_copy[2048];
-        strncpy(line_copy, raw_lines[i], sizeof(line_copy) - 1);
-        line_copy[sizeof(line_copy) - 1] = '\0';
-        char *saveptr = NULL;
-        for (char *tok = SAIA_STRTOK_R(line_copy, " \t", &saveptr);
-             tok;
-             tok = SAIA_STRTOK_R(NULL, " \t", &saveptr)) {
-            if (*tok == '#') break;
-            est_total += estimate_expanded_count(tok);
-        }
-    }
+    /* 快速估算总目标数 — 文件流式读取，不整体加载到内存 */
+    size_t est_total = scanner_estimate_targets_from_file(targets_file);
     printf("开始扫描... 预估目标: %zu, 总端口: %zu\n", est_total, port_count);
 
     feed_context_t feed_ctx;
@@ -1491,21 +1559,31 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
     /* skip caches are preloaded once per audit session */
     write_scan_progress(&feed_ctx, "running");
 
-    for (size_t li = 0; li < raw_count && g_running && !g_reload; li++) {
-        const char *line = raw_lines[li];
-        if (!line || !*line || *line == '#') continue;
+    FILE *fp = fopen(targets_file, "rb");
+    if (!fp) {
+        printf("[错误] 无法打开目标文件: %s\n", targets_file);
+        MUTEX_LOCK(lock_stats);
+        feeding_in_progress = 0;
+        MUTEX_UNLOCK(lock_stats);
+        write_scan_progress(&feed_ctx, "stopped");
+        return;
+    }
 
-        char line_copy[2048];
+    char line[4096];
+    while (g_running && !g_reload && fgets(line, sizeof(line), fp)) {
+        if (!line[0] || line[0] == '#') continue;
+        char line_copy[4096];
         strncpy(line_copy, line, sizeof(line_copy) - 1);
         line_copy[sizeof(line_copy) - 1] = '\0';
         char *saveptr = NULL;
-        for (char *tok = SAIA_STRTOK_R(line_copy, " \t", &saveptr);
+        for (char *tok = SAIA_STRTOK_R(line_copy, " \t\r\n", &saveptr);
              tok && g_running && !g_reload;
-             tok = SAIA_STRTOK_R(NULL, " \t", &saveptr)) {
+             tok = SAIA_STRTOK_R(NULL, " \t\r\n", &saveptr)) {
             if (*tok == '#') break;
             if (iterate_expanded_targets(tok, feed_single_target, &feed_ctx) != 0) break;
         }
     }
+    fclose(fp);
 
     MUTEX_LOCK(lock_stats);
     feeding_in_progress = 0;
@@ -1553,6 +1631,13 @@ void scanner_cleanup(void) {
     feeding_in_progress = 0;
     snprintf(progress_token, sizeof(progress_token), "-");
     MUTEX_UNLOCK(lock_stats);
+
+    while (g_worker_arg_pool) {
+        worker_arg_pool_t *next = g_worker_arg_pool->next;
+        free(g_worker_arg_pool);
+        g_worker_arg_pool = next;
+    }
+    g_worker_arg_pool_size = 0;
 
     target_set_free(&g_resume_cache);
     target_set_free(&g_history_cache);

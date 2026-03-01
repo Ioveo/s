@@ -960,9 +960,7 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
 
     }
 
-    // 读取节点文件 (原始行) — 兼容 DEJI.py 的备用文件搜索顺序
-    char **raw_nodes = NULL;
-    size_t raw_node_count = 0;
+    // 定位节点文件 — 兼容 DEJI.py 的备用文件搜索顺序
     const char *used_file = NULL;
 
     char path_ip[MAX_PATH_LENGTH], path_IP[MAX_PATH_LENGTH], path_nodes[MAX_PATH_LENGTH];
@@ -982,20 +980,12 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
 
     for (int ci = 0; ci < ncand; ci++) {
         if (!candidates[ci]) continue;
-        if (raw_nodes) {
-            for (size_t ri = 0; ri < raw_node_count; ri++) free(raw_nodes[ri]);
-            free(raw_nodes);
-            raw_nodes = NULL;
-            raw_node_count = 0;
-        }
-        if (file_read_lines(candidates[ci], &raw_nodes, &raw_node_count) == 0
-            && raw_node_count > 0) {
-            used_file = candidates[ci];
-            break;
-        }
+        if (!file_exists(candidates[ci])) continue;
+        used_file = candidates[ci];
+        break;
     }
 
-    if (!raw_nodes || raw_node_count == 0) {
+    if (!used_file) {
         color_red();
         printf("\n[错误] 没有找到目标节点!\n");
         color_reset();
@@ -1007,13 +997,9 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
         return -1;
     }
 
-    /* 流式展开 IP 段 — 不再一次性 malloc 全部 IP，而是传给 scanner_start_streaming 逐行展开 */
-    printf("%s解析 IP 列表...%s 原始行数:%zu  来源: %s\n",
-           C_CYAN, C_RESET, raw_node_count, used_file ? used_file : "?");
-    /* 调试: 打印前 3 行原始内容 */
-    for (size_t di = 0; di < raw_node_count && di < 3; di++) {
-        printf("  [调试] 原始行[%zu]: \"%s\"\n", di, raw_nodes[di] ? raw_nodes[di] : "(null)");
-    }
+    /* 仅传递文件路径；由扫描器内部按行渐进读取与展开，避免大文件一次性进内存 */
+    printf("%s解析 IP 列表...%s 来源: %s\n",
+           C_CYAN, C_RESET, used_file ? used_file : "?");
 
     char **raw_tokens = NULL;
 
@@ -1083,8 +1069,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
         color_red();
         printf("错误: 端口配置为空，无法启动审计\n");
         color_reset();
-        for (size_t i = 0; i < raw_node_count; i++) free(raw_nodes[i]);
-        free(raw_nodes);
         if (creds) free(creds);
         scanner_cleanup();
         network_cleanup();
@@ -1152,7 +1136,7 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
                    i + 1,
                    i + chunk,
                    port_count);
-            scanner_start_streaming(raw_nodes, raw_node_count,
+            scanner_start_streaming(used_file,
                                     creds, cred_count,
                                     ports + i, chunk);
 
@@ -1164,7 +1148,7 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
         if (g_config.resume_enabled) {
             saia_resume_save(0, port_count);
         }
-        scanner_start_streaming(raw_nodes, raw_node_count, creds, cred_count, ports, port_count);
+        scanner_start_streaming(used_file, creds, cred_count, ports, port_count);
         if (g_config.resume_enabled && g_running && !g_reload) {
             saia_resume_save(port_count, port_count);
         }
@@ -1180,10 +1164,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
     }
 
     // 清理数据
-
-    for (size_t i = 0; i < raw_node_count; i++) free(raw_nodes[i]);
-
-    free(raw_nodes);
 
     if (creds) free(creds);
 
