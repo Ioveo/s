@@ -355,8 +355,8 @@ int saia_interactive_mode(void) {
                 color_cyan();
                 printf("\n>>> [14] 更新口令 (tokens.list)\n");
                 color_reset();
-                printf("请逐行输入 user:pass (输入 EOF 结束):\n");
-                int count = saia_write_list_file_from_input(tokens_path, 0, 0);
+                printf("请粘贴 token/user:pass，支持空格或换行；输入 EOF/END/. 结束:\n");
+                int count = saia_write_list_file_from_input(tokens_path, 1, 0);
                 if (count >= 0) {
                     color_green();
                     printf(">>> 口令已更新，本次写入 %d 条\n\n", count);

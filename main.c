@@ -878,7 +878,7 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
 
     color_reset();
 
-    printf("请输入内容 (粘贴完成后按回车，输入 EOF 再按回车结束):\n");
+    printf("请输入内容 (支持空格/换行; 输入 EOF/END/点号 . 结束):\n");
 
     char buffer[65536];
 
@@ -934,8 +934,12 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
 
     int count = 0;
 
+    int empty_lines = 0;
     while (fgets(buffer, sizeof(buffer), stdin)) {
         if (!g_running) break;
+
+        /* Windows 控制台 Ctrl+Z */
+        if ((unsigned char)buffer[0] == 26) break;
 
         char *comment = strchr(buffer, '#');
 
@@ -947,11 +951,22 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
 
         if (!trimmed) continue;
 
-        if (strcmp(trimmed, "EOF") == 0) {
+        if (strcmp(trimmed, "EOF") == 0 ||
+            strcmp(trimmed, "eof") == 0 ||
+            strcmp(trimmed, "END") == 0 ||
+            strcmp(trimmed, "end") == 0 ||
+            strcmp(trimmed, ".") == 0) {
 
             break;
 
         }
+
+        if (strlen(trimmed) == 0) {
+            empty_lines++;
+            if (empty_lines >= 2) break;
+            continue;
+        }
+        empty_lines = 0;
 
         if (split_spaces) {
 
@@ -1171,8 +1186,8 @@ int saia_nodes_menu(void) {
             color_cyan();
             printf("\n>>> [14] 更新 Tokens\n");
             color_reset();
-            printf("请逐行输入 user:pass 或 token (输入 EOF 结束):\n");
-            int count = saia_write_list_file_from_input(tokens_path, 0, 0);
+            printf("请粘贴 token/user:pass，支持空格或换行；输入 EOF/END/. 结束:\n");
+            int count = saia_write_list_file_from_input(tokens_path, 1, 0);
             if (count >= 0) {
                 color_green();
                 printf(">>> Tokens 已更新，本次写入 %d 条\n\n", count);

