@@ -914,14 +914,17 @@ int saia_interactive_mode(void) {
                 if (file_read_lines(report_path, &lines, &lc) == 0 && lc > 0) {
                     int found = 0;
                     for (size_t i = 0; i < lc; i++) {
-                        if (lines[i] && strstr(lines[i], "NO_L7")) {
+                        if (lines[i] &&
+                            (strstr(lines[i], "NO_L7") ||
+                             strstr(lines[i], "无L7能力") ||
+                             strstr(lines[i], "疑似无L7"))) {
                             printf("  %s\n", lines[i]);
                             found++;
                         }
                         free(lines[i]);
                     }
                     free(lines);
-                    if (!found) printf("  暂无 No-L7 记录\n");
+                    if (!found) printf("  暂无疑似无L7数据\n");
                 } else {
                     printf("  暂无审计报告\n");
                 }
