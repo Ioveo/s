@@ -10,8 +10,8 @@ typedef struct {
 static volatile sig_atomic_t g_audit_running = 0;
 
 static const char *saia_dash_spinner(int running) {
-    static const char *frames[] = {"[•□□□]", "[□•□□]", "[□□•□]", "[□□□•]"};
-    if (!running) return "[□□□□]";
+    static const char *frames[] = {"[o...]", "[.o..]", "[..o.]", "[...o]"};
+    if (!running) return "[....]";
     time_t now = time(NULL);
     return frames[(int)(now % 4)];
 }
@@ -1000,22 +1000,22 @@ int saia_realtime_monitor(void) {
         char left[8][180];
         char right[8][180];
         snprintf(left[0], sizeof(left[0]), "SAIA MONITOR v%s %s", SAIA_VERSION, saia_dash_spinner(scan_running));
-        snprintf(left[1], sizeof(left[1]), "状态:%s | 模式:%s", status_str, mode_str);
-        snprintf(left[2], sizeof(left[2]), "策略:%s | 运行:%02d:%02d:%02d", scan_str, hours, mins, secs);
-        snprintf(left[3], sizeof(left[3]), "总发现:%llu | 总验真:%llu", (unsigned long long)total_found, (unsigned long long)total_verified);
-        snprintf(left[4], sizeof(left[4]), "XUI 发现/验真:%llu/%llu", (unsigned long long)xui_found, (unsigned long long)xui_verified);
-        snprintf(left[5], sizeof(left[5]), "S5 发现/验真:%llu/%llu", (unsigned long long)s5_found, (unsigned long long)s5_verified);
-        snprintf(left[6], sizeof(left[6]), "线程:%d | 会话:%s", g_config.threads, scan_running ? "RUNNING" : "STOPPED");
-        snprintf(left[7], sizeof(left[7]), "IP数:%zu | TK数:%zu", ip_count, tk_count);
+        snprintf(left[1], sizeof(left[1]), "Status:%s | Mode:%s", status_str, mode_str);
+        snprintf(left[2], sizeof(left[2]), "Scan:%s | Runtime:%02d:%02d:%02d", scan_str, hours, mins, secs);
+        snprintf(left[3], sizeof(left[3]), "Total Found:%llu | Verified:%llu", (unsigned long long)total_found, (unsigned long long)total_verified);
+        snprintf(left[4], sizeof(left[4]), "XUI Found/Ver:%llu/%llu", (unsigned long long)xui_found, (unsigned long long)xui_verified);
+        snprintf(left[5], sizeof(left[5]), "S5  Found/Ver:%llu/%llu", (unsigned long long)s5_found, (unsigned long long)s5_verified);
+        snprintf(left[6], sizeof(left[6]), "Threads:%d | Session:%s", g_config.threads, scan_running ? "RUNNING" : "STOPPED");
+        snprintf(left[7], sizeof(left[7]), "IP Count:%zu | TK Count:%zu", ip_count, tk_count);
 
-        snprintf(right[0], sizeof(right[0]), "MONITOR DETAIL | 运行细节 %s", saia_dash_spinner(scan_running));
-        snprintf(right[1], sizeof(right[1]), "压背: %s", g_config.backpressure.enabled ? "ON" : "OFF");
+        snprintf(right[0], sizeof(right[0]), "MONITOR DETAIL %s", saia_dash_spinner(scan_running));
+        snprintf(right[1], sizeof(right[1]), "Backpressure: %s", g_config.backpressure.enabled ? "ON" : "OFF");
         snprintf(right[2], sizeof(right[2]), "CPU: %.1f%% | MEM_FREE: %.0fMB", g_config.backpressure.current_cpu, g_config.backpressure.current_mem);
-        snprintf(right[3], sizeof(right[3]), "连接: %d/%d", g_config.backpressure.current_connections, g_config.backpressure.max_connections);
-        snprintf(right[4], sizeof(right[4]), "限流: %s", g_config.backpressure.is_throttled ? "ON" : "OFF");
-        snprintf(right[5], sizeof(right[5]), "PID: %d | 最近命中TK: %s", (int)g_state.pid, last_tk);
-        snprintf(right[6], sizeof(right[6]), "报告: %s", g_config.report_file);
-        snprintf(right[7], sizeof(right[7]), "每2秒刷新，Enter/q返回");
+        snprintf(right[3], sizeof(right[3]), "Connections: %d/%d", g_config.backpressure.current_connections, g_config.backpressure.max_connections);
+        snprintf(right[4], sizeof(right[4]), "Throttle: %s", g_config.backpressure.is_throttled ? "ON" : "OFF");
+        snprintf(right[5], sizeof(right[5]), "PID:%d | Last TK:%s", (int)g_state.pid, last_tk);
+        snprintf(right[6], sizeof(right[6]), "Report: %s", g_config.report_file);
+        snprintf(right[7], sizeof(right[7]), "Refresh 2s; Enter/q return");
 
         for (int i = 0; i < 8; i++) {
             char fit[180];

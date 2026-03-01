@@ -214,8 +214,8 @@ static int saia_menu_is_scan_running(void) {
 }
 
 static const char *saia_menu_spinner(int running) {
-    static const char *frames[] = {"[•□□□]", "[□•□□]", "[□□•□]", "[□□□•]"};
-    if (!running) return "[□□□□]";
+    static const char *frames[] = {"[o...]", "[.o..]", "[..o.]", "[...o]"};
+    if (!running) return "[....]";
     time_t now = time(NULL);
     return frames[(int)(now % 4)];
 }
@@ -326,22 +326,22 @@ int saia_print_menu(void) {
     char left[8][160];
     char right[8][160];
     snprintf(left[0], sizeof(left[0]), "SAIA MASTER CONSOLE v%s %s", SAIA_VERSION, saia_menu_spinner(scan_running));
-    snprintf(left[1], sizeof(left[1]), "审计任务:%s | 断点续连:%s | Telegram:%s", scan_running ? "RUNNING" : "STOPPED", g_config.resume_enabled ? "ON" : "OFF", g_config.telegram_enabled ? "ON" : "OFF");
-    snprintf(left[2], sizeof(left[2]), "模式:%d | 策略:%d | 线程:%d", g_config.mode, g_config.scan_mode, g_config.threads);
-    snprintf(left[3], sizeof(left[3]), "总发现:%llu | 总验真:%llu", (unsigned long long)total_found, (unsigned long long)total_verified);
-    snprintf(left[4], sizeof(left[4]), "XUI 发现/验真:%llu/%llu", (unsigned long long)xui_found, (unsigned long long)xui_verified);
-    snprintf(left[5], sizeof(left[5]), "S5 发现/验真:%llu/%llu", (unsigned long long)s5_found, (unsigned long long)s5_verified);
+    snprintf(left[1], sizeof(left[1]), "Audit:%s | Resume:%s | Telegram:%s", scan_running ? "RUNNING" : "STOPPED", g_config.resume_enabled ? "ON" : "OFF", g_config.telegram_enabled ? "ON" : "OFF");
+    snprintf(left[2], sizeof(left[2]), "Mode:%d | Scan:%d | Threads:%d", g_config.mode, g_config.scan_mode, g_config.threads);
+    snprintf(left[3], sizeof(left[3]), "Total Found:%llu | Verified:%llu", (unsigned long long)total_found, (unsigned long long)total_verified);
+    snprintf(left[4], sizeof(left[4]), "XUI Found/Ver:%llu/%llu", (unsigned long long)xui_found, (unsigned long long)xui_verified);
+    snprintf(left[5], sizeof(left[5]), "S5  Found/Ver:%llu/%llu", (unsigned long long)s5_found, (unsigned long long)s5_verified);
     snprintf(left[6], sizeof(left[6]), "CPU: %.1f%% | MEM_FREE: %.0fMB", g_config.backpressure.current_cpu, g_config.backpressure.current_mem);
-    snprintf(left[7], sizeof(left[7]), "状态: %s", scan_running ? "Running" : "Idle");
+    snprintf(left[7], sizeof(left[7]), "State: %s", scan_running ? "Running" : "Idle");
 
-    snprintf(right[0], sizeof(right[0]), "MONITOR DETAIL | 运行细节 %s", saia_menu_spinner(scan_running));
-    snprintf(right[1], sizeof(right[1]), "后台会话: %s", scan_running ? "saia_scan RUNNING" : "NOT FOUND");
-    snprintf(right[2], sizeof(right[2]), "IP数: %zu | TK数: %zu", ip_count, tk_count);
-    snprintf(right[3], sizeof(right[3]), "最近命中TK: %s", last_tk);
-    snprintf(right[4], sizeof(right[4]), "压背: %s", g_config.backpressure.enabled ? "ON" : "OFF");
-    snprintf(right[5], sizeof(right[5]), "限流状态: %s", g_config.backpressure.is_throttled ? "THROTTLED" : "NORMAL");
-    snprintf(right[6], sizeof(right[6]), "连接: %d/%d", g_config.backpressure.current_connections, g_config.backpressure.max_connections);
-    snprintf(right[7], sizeof(right[7]), "每1秒自动刷新，可直接输入菜单号");
+    snprintf(right[0], sizeof(right[0]), "MONITOR DETAIL %s", saia_menu_spinner(scan_running));
+    snprintf(right[1], sizeof(right[1]), "Session: %s", scan_running ? "saia_scan RUNNING" : "NOT FOUND");
+    snprintf(right[2], sizeof(right[2]), "IP Count: %zu | TK Count: %zu", ip_count, tk_count);
+    snprintf(right[3], sizeof(right[3]), "Last Verified TK: %s", last_tk);
+    snprintf(right[4], sizeof(right[4]), "Backpressure: %s", g_config.backpressure.enabled ? "ON" : "OFF");
+    snprintf(right[5], sizeof(right[5]), "Throttle: %s", g_config.backpressure.is_throttled ? "THROTTLED" : "NORMAL");
+    snprintf(right[6], sizeof(right[6]), "Connections: %d/%d", g_config.backpressure.current_connections, g_config.backpressure.max_connections);
+    snprintf(right[7], sizeof(right[7]), "Auto refresh 1s; type menu number");
 
     for (int i = 0; i < 8; i++) {
         char fit[160];
