@@ -143,13 +143,49 @@ static void saia_dash_last_verified_token(char *out, size_t out_size) {
     free(lines);
 }
 
-static void saia_dash_runtime_metrics(size_t *ip_count, size_t *tk_count, char *last_tk, size_t last_tk_size) {
+static size_t saia_dash_estimate_targets_file(const char *path) {
+    char **lines = NULL;
+    size_t lc = 0;
+    size_t total = 0;
+    if (file_read_lines(path, &lines, &lc) != 0 || !lines) return 0;
+    for (size_t i = 0; i < lc; i++) {
+        if (!lines[i] || !*lines[i] || lines[i][0] == '#') {
+            free(lines[i]);
+            continue;
+        }
+        char line_copy[2048];
+        strncpy(line_copy, lines[i], sizeof(line_copy) - 1);
+        line_copy[sizeof(line_copy) - 1] = '\0';
+        char *saveptr = NULL;
+#ifdef _WIN32
+        char *tok = strtok_s(line_copy, " \t", &saveptr);
+        while (tok) {
+#else
+        char *tok = strtok_r(line_copy, " \t", &saveptr);
+        while (tok) {
+#endif
+            if (*tok == '#') break;
+            total += estimate_expanded_count(tok);
+#ifdef _WIN32
+            tok = strtok_s(NULL, " \t", &saveptr);
+#else
+            tok = strtok_r(NULL, " \t", &saveptr);
+#endif
+        }
+        free(lines[i]);
+    }
+    free(lines);
+    return total;
+}
+
+static void saia_dash_runtime_metrics(size_t *ip_count, size_t *tk_count, size_t *ip_lines, char *last_tk, size_t last_tk_size) {
     static time_t last_refresh = 0;
     static long long nodes_mtime = 0;
     static long long tokens_mtime = 0;
     static long long report_mtime = 0;
     static size_t cached_ip_count = 0;
     static size_t cached_tk_count = 0;
+    static size_t cached_ip_lines = 0;
     static char cached_last_tk[128] = "N/A";
 
     time_t now = time(NULL);
@@ -162,7 +198,8 @@ static void saia_dash_runtime_metrics(size_t *ip_count, size_t *tk_count, char *
     if (nmt != nodes_mtime || tmt != tokens_mtime || rmt != report_mtime) need_refresh = 1;
 
     if (need_refresh) {
-        cached_ip_count = saia_dash_count_file_lines(g_config.nodes_file);
+        cached_ip_lines = saia_dash_count_file_lines(g_config.nodes_file);
+        cached_ip_count = saia_dash_estimate_targets_file(g_config.nodes_file);
         cached_tk_count = saia_dash_count_file_lines(g_config.tokens_file);
         saia_dash_last_verified_token(cached_last_tk, sizeof(cached_last_tk));
         nodes_mtime = nmt;
@@ -173,6 +210,7 @@ static void saia_dash_runtime_metrics(size_t *ip_count, size_t *tk_count, char *
 
     if (ip_count) *ip_count = cached_ip_count;
     if (tk_count) *tk_count = cached_tk_count;
+    if (ip_lines) *ip_lines = cached_ip_lines;
     if (last_tk && last_tk_size > 0) {
         snprintf(last_tk, last_tk_size, "%s", cached_last_tk);
     }
@@ -1032,8 +1070,9 @@ int saia_realtime_monitor(void) {
         uint64_t total_verified = g_state.total_verified;
         size_t ip_count = 0;
         size_t tk_count = 0;
+        size_t ip_lines = 0;
         char last_tk[128];
-        saia_dash_runtime_metrics(&ip_count, &tk_count, last_tk, sizeof(last_tk));
+        saia_dash_runtime_metrics(&ip_count, &tk_count, &ip_lines, last_tk, sizeof(last_tk));
         saia_count_report_stats(g_config.report_file,
                                 &xui_found, &xui_verified,
                                 &s5_found, &s5_verified,
@@ -1042,22 +1081,22 @@ int saia_realtime_monitor(void) {
         char left[8][180];
         char right[8][180];
         snprintf(left[0], sizeof(left[0]), "SAIA MONITOR v%s %s", SAIA_VERSION, saia_dash_spinner(scan_running));
-        snprintf(left[1], sizeof(left[1]), "Status:%s | Mode:%s", status_str, mode_str);
-        snprintf(left[2], sizeof(left[2]), "Scan:%s | Runtime:%02d:%02d:%02d", scan_str, hours, mins, secs);
-        snprintf(left[3], sizeof(left[3]), "Total Found:%llu | Verified:%llu", (unsigned long long)total_found, (unsigned long long)total_verified);
-        snprintf(left[4], sizeof(left[4]), "XUI Found/Ver:%llu/%llu", (unsigned long long)xui_found, (unsigned long long)xui_verified);
-        snprintf(left[5], sizeof(left[5]), "S5  Found/Ver:%llu/%llu", (unsigned long long)s5_found, (unsigned long long)s5_verified);
-        snprintf(left[6], sizeof(left[6]), "Threads:%d | Session:%s", g_config.threads, scan_running ? "RUNNING" : "STOPPED");
-        snprintf(left[7], sizeof(left[7]), "IP Count:%zu | TK Count:%zu", ip_count, tk_count);
+        snprintf(left[1], sizeof(left[1]), "状态:%s | 模式:%s", status_str, mode_str);
+        snprintf(left[2], sizeof(left[2]), "策略:%s | 运行:%02d:%02d:%02d", scan_str, hours, mins, secs);
+        snprintf(left[3], sizeof(left[3]), "总发现:%llu | 总验真:%llu", (unsigned long long)total_found, (unsigned long long)total_verified);
+        snprintf(left[4], sizeof(left[4]), "XUI 发现/验真:%llu/%llu", (unsigned long long)xui_found, (unsigned long long)xui_verified);
+        snprintf(left[5], sizeof(left[5]), "S5  发现/验真:%llu/%llu", (unsigned long long)s5_found, (unsigned long long)s5_verified);
+        snprintf(left[6], sizeof(left[6]), "线程:%d | 会话:%s", g_config.threads, scan_running ? "运行中" : "已停止");
+        snprintf(left[7], sizeof(left[7]), "IP段:%zu | 预估IP:%zu | TK:%zu", ip_lines, ip_count, tk_count);
 
-        snprintf(right[0], sizeof(right[0]), "MONITOR DETAIL %s", saia_dash_spinner(scan_running));
-        snprintf(right[1], sizeof(right[1]), "Backpressure: %s", g_config.backpressure.enabled ? "ON" : "OFF");
+        snprintf(right[0], sizeof(right[0]), "运行细节 %s", saia_dash_spinner(scan_running));
+        snprintf(right[1], sizeof(right[1]), "压背: %s", g_config.backpressure.enabled ? "开" : "关");
         snprintf(right[2], sizeof(right[2]), "CPU: %.1f%% | MEM_FREE: %.0fMB", g_config.backpressure.current_cpu, g_config.backpressure.current_mem);
-        snprintf(right[3], sizeof(right[3]), "Connections: %d/%d", g_config.backpressure.current_connections, g_config.backpressure.max_connections);
-        snprintf(right[4], sizeof(right[4]), "Throttle: %s", g_config.backpressure.is_throttled ? "ON" : "OFF");
-        snprintf(right[5], sizeof(right[5]), "PID:%d | Last TK:%s", (int)g_state.pid, last_tk);
-        snprintf(right[6], sizeof(right[6]), "Report: %s", g_config.report_file);
-        snprintf(right[7], sizeof(right[7]), "Refresh 2s; Enter/q return");
+        snprintf(right[3], sizeof(right[3]), "连接: %d/%d", g_config.backpressure.current_connections, g_config.backpressure.max_connections);
+        snprintf(right[4], sizeof(right[4]), "限流: %s", g_config.backpressure.is_throttled ? "是" : "否");
+        snprintf(right[5], sizeof(right[5]), "PID:%d | 最近命中TK:%s", (int)g_state.pid, last_tk);
+        snprintf(right[6], sizeof(right[6]), "报告: %s", g_config.report_file);
+        snprintf(right[7], sizeof(right[7]), "每2秒刷新，Enter/q返回");
 
         for (int i = 0; i < 8; i++) {
             char fit[180];
