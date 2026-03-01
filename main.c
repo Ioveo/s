@@ -871,84 +871,49 @@ static int saia_cleanup_profile_files(const char *base_dir) {
 // ==================== 辅助输入函数 ====================
 
 int saia_write_list_file_from_input(const char *file_path, int split_spaces, int append_mode) {
-
     color_cyan();
-
     printf("支持空格/换行混合输入 (自动去除 # 注释)\n");
-
     color_reset();
-
     printf("请输入内容 (支持空格/换行; 输入 EOF/END/点号 . 结束):\n");
 
     char buffer[65536];
-
     char tmp_path[4096];
-
     snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", file_path);
 
-    FILE *fp;
-
-    if (append_mode) {
-
-        fp = fopen(tmp_path, "w");
-
-        if (fp && file_exists(file_path)) {
-
-            char *content = file_read_all(file_path);
-
-            if (content) {
-
-                fprintf(fp, "%s", content);
-
-                size_t len = strlen(content);
-
-                if (len > 0 && content[len - 1] != '\n') {
-
-                    fprintf(fp, "\n");
-
-                }
-
-                free(content);
-
-            }
-
-        }
-
-    } else {
-
-        fp = fopen(tmp_path, "w");
-
+    FILE *fp = fopen(tmp_path, "w");
+    if (!fp) {
+        color_red();
+        printf(">>> 写入临时文件失败\n");
+        color_reset();
+        return -1;
     }
 
-    if (!fp) {
-
-        color_red();
-
-        printf(">>> 写入临时文件失败\n");
-
-        color_reset();
-
-        return -1;
-
+    if (append_mode && file_exists(file_path)) {
+        char *content = file_read_all(file_path);
+        if (content) {
+            fprintf(fp, "%s", content);
+            size_t len = strlen(content);
+            if (len > 0 && content[len - 1] != '\n') {
+                fprintf(fp, "\n");
+            }
+            free(content);
+        }
     }
 
     int count = 0;
     int empty_lines = 0;
     int single_blank_to_end = (file_path && strstr(file_path, "tokens.list") != NULL);
+    int auto_finish_after_first_line = single_blank_to_end;
+
     while (fgets(buffer, sizeof(buffer), stdin)) {
         if (!g_running) break;
-
-        /* Windows 控制台 Ctrl+Z */
         if ((unsigned char)buffer[0] == 26) break;
 
         char *comment = strchr(buffer, '#');
-
         if (comment) *comment = '\0';
 
         buffer[strcspn(buffer, "\n")] = '\0';
-
         char *trimmed = str_trim(buffer);
-
         if (!trimmed) continue;
 
         if (strcmp(trimmed, "EOF") == 0 ||
@@ -956,66 +921,88 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
             strcmp(trimmed, "END") == 0 ||
             strcmp(trimmed, "end") == 0 ||
             strcmp(trimmed, ".") == 0) {
-
             break;
-
         }
 
         if (strlen(trimmed) == 0) {
             empty_lines++;
-            if (single_blank_to_end) {
-                if (empty_lines >= 1) break;
-            } else {
-                if (empty_lines >= 2) break;
+            if ((single_blank_to_end && empty_lines >= 1) || (!single_blank_to_end && empty_lines >= 2)) {
+                break;
             }
             continue;
         }
         empty_lines = 0;
 
+        int line_added = 0;
         if (split_spaces) {
-
             char *token = strtok(trimmed, " \t\n");
-
             while (token != NULL) {
-
                 if (strlen(token) > 0) {
-
                     fprintf(fp, "%s\n", token);
-
                     count++;
-
+                    line_added++;
                 }
-
                 token = strtok(NULL, " \t\n");
-
             }
-
         } else {
-
             if (strlen(trimmed) > 0) {
-
                 fprintf(fp, "%s\n", trimmed);
-
                 count++;
-
+                line_added++;
             }
-
         }
 
+        if (auto_finish_after_first_line && line_added > 0) {
+            break;
+        }
     }
 
     fclose(fp);
-
     if (file_exists(file_path)) {
-
         file_remove(file_path);
+    }
+    rename(tmp_path, file_path);
+    return count;
+}
 
+static int saia_write_tokens_single_paste(const char *file_path) {
+    if (!file_path || !*file_path) return -1;
+
+    char tmp_path[4096];
+    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", file_path);
+
+    FILE *fp = fopen(tmp_path, "w");
+    if (!fp) return -1;
+
+    char buffer[65536];
+    if (!fgets(buffer, sizeof(buffer), stdin)) {
+        fclose(fp);
+        if (file_exists(tmp_path)) file_remove(tmp_path);
+        return -1;
     }
 
+    char *comment = strchr(buffer, '#');
+    if (comment) *comment = '\0';
+
+    buffer[strcspn(buffer, "\n")] = '\0';
+    char *trimmed = str_trim(buffer);
+
+    int count = 0;
+    if (trimmed && strlen(trimmed) > 0) {
+        char *token = strtok(trimmed, " \t\n");
+        while (token != NULL) {
+            if (strlen(token) > 0) {
+                fprintf(fp, "%s\n", token);
+                count++;
+            }
+            token = strtok(NULL, " \t\n");
+        }
+    }
+
+    fclose(fp);
+    if (file_exists(file_path)) file_remove(file_path);
     rename(tmp_path, file_path);
-
     return count;
-
 }
 
 // ==================== 节点管理 ====================
@@ -1103,6 +1090,7 @@ int saia_nodes_menu(void) {
             }
             break;
         }
+
         case 5: {
             color_cyan();
             printf("\n>>> [5] S5 面板查看\n");
@@ -1190,9 +1178,8 @@ int saia_nodes_menu(void) {
             color_cyan();
             printf("\n>>> [14] 更新 Tokens\n");
             color_reset();
-            printf("请粘贴 token/user:pass，支持空格或换行；输入 EOF/END/. 结束:\n");
-            printf("提示: 粘贴完成后，直接回车一个空行也可结束。\n");
-            int count = saia_write_list_file_from_input(tokens_path, 1, 0);
+            printf("请一次性粘贴 token/user:pass 列表，然后回车。\n");
+            int count = saia_write_tokens_single_paste(tokens_path);
             if (count >= 0) {
                 color_green();
                 printf(">>> Tokens 已更新，本次写入 %d 条\n\n", count);
