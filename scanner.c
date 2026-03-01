@@ -542,6 +542,8 @@ static void scanner_report_found_open(const worker_arg_t *task) {
                 detail = "[节点-可连通] S5-OPEN";
             } else if (task->s5_method == 0x02) {
                 detail = "[资产-加密节点] S5-AUTH";
+            } else if (task->s5_method == 0xFF) {
+                detail = "[节点-可连通] S5-UNSUPPORTED-METHOD";
             } else {
                 detail = "端口开放 + S5特征命中";
             }
@@ -559,6 +561,8 @@ static void scanner_report_found_open(const worker_arg_t *task) {
                 detail = "[节点-可连通] S5-OPEN";
             } else if (task->s5_method == 0x02) {
                 detail = "[资产-加密节点] S5-AUTH";
+            } else if (task->s5_method == 0xFF) {
+                detail = "[节点-可连通] S5-UNSUPPORTED-METHOD";
             } else {
                 detail = "端口开放 + S5特征命中";
             }
@@ -615,8 +619,6 @@ static int xui_has_required_fingerprint(const char *ip, uint16_t port, int timeo
 }
 
 static int s5_has_required_fingerprint(const char *ip, uint16_t port, int timeout_ms, int *method_out) {
-    int fd = socket_create(0);
-    if (fd < 0) return 0;
     if (method_out) *method_out = -1;
 
     struct sockaddr_in addr;
@@ -625,28 +627,37 @@ static int s5_has_required_fingerprint(const char *ip, uint16_t port, int timeou
     addr.sin_port = htons(port);
     inet_pton(AF_INET, ip, &addr.sin_addr);
 
-    if (socket_connect_timeout(fd, (struct sockaddr*)&addr, sizeof(addr), timeout_ms) != 0) {
+    for (int attempt = 0; attempt < 2; attempt++) {
+        int fd = socket_create(0);
+        if (fd < 0) return 0;
+
+        if (socket_connect_timeout(fd, (struct sockaddr*)&addr, sizeof(addr), timeout_ms) != 0) {
+            socket_close(fd);
+            continue;
+        }
+
+        /* 提供 no-auth + user/pass 两种方法，识别标准 SOCKS5 协商回应 */
+        char hello[] = {0x05, 0x02, 0x00, 0x02};
+        if (socket_send_all(fd, hello, sizeof(hello), timeout_ms) < 0) {
+            socket_close(fd);
+            continue;
+        }
+
+        char resp[2];
+        int n = socket_recv_until(fd, resp, sizeof(resp), NULL, timeout_ms);
         socket_close(fd);
-        return 0;
+        if (n != 2) continue;
+
+        if ((unsigned char)resp[0] != 0x05) continue;
+
+        int method = (int)(unsigned char)resp[1];
+        if (method_out) *method_out = method;
+        /* 标准档：接受 0x00/0x02/0xFF（服务存在但方法不匹配） */
+        if (method == 0x00 || method == 0x02 || method == 0xFF) {
+            return 1;
+        }
     }
 
-    /* 提供 no-auth + user/pass 两种方法，识别标准 SOCKS5 协商回应 */
-    char hello[] = {0x05, 0x02, 0x00, 0x02};
-    if (socket_send_all(fd, hello, sizeof(hello), timeout_ms) < 0) {
-        socket_close(fd);
-        return 0;
-    }
-
-    char resp[2];
-    int n = socket_recv_until(fd, resp, sizeof(resp), NULL, timeout_ms);
-    socket_close(fd);
-    if (n != 2) return 0;
-
-    if ((unsigned char)resp[0] != 0x05) return 0;
-    if ((unsigned char)resp[1] == 0x00 || (unsigned char)resp[1] == 0x02) {
-        if (method_out) *method_out = (int)(unsigned char)resp[1];
-        return 1;
-    }
     return 0;
 }
 
@@ -701,6 +712,10 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
             if (s5_method == 0x02) {
                 snprintf(result_line, sizeof(result_line),
                          "[S5_FOUND] [节点-可连通] %s:%d | S5-AUTH | 字典未命中或无L7能力",
+                         task->ip, task->port);
+            } else if (s5_method == 0xFF) {
+                snprintf(result_line, sizeof(result_line),
+                         "[S5_FOUND] [节点-可连通] %s:%d | S5-UNSUPPORTED-METHOD | 疑似S5但方法不匹配",
                          task->ip, task->port);
             } else {
                 snprintf(result_line, sizeof(result_line),
@@ -966,7 +981,7 @@ void *worker_thread(void *arg) {
     task->s5_fingerprint_ok = -1;
     task->s5_method = -1;
     if (task->work_mode == MODE_S5 || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY) {
-        task->s5_fingerprint_ok = s5_has_required_fingerprint(task->ip, task->port, 2000, &task->s5_method);
+        task->s5_fingerprint_ok = s5_has_required_fingerprint(task->ip, task->port, 3000, &task->s5_method);
     }
     
     // 端口开放后，按模式统计“有效命中”（非纯端口开放）
