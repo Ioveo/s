@@ -261,11 +261,20 @@ static size_t saia_estimate_targets_file(const char *path) {
         strncpy(line_copy, lines[i], sizeof(line_copy) - 1);
         line_copy[sizeof(line_copy) - 1] = '\0';
         char *saveptr = NULL;
-        for (char *tok = SAIA_STRTOK_R(line_copy, " \t", &saveptr);
-             tok;
-             tok = SAIA_STRTOK_R(NULL, " \t", &saveptr)) {
+#ifdef _WIN32
+        char *tok = strtok_s(line_copy, " \t", &saveptr);
+        while (tok) {
+#else
+        char *tok = strtok_r(line_copy, " \t", &saveptr);
+        while (tok) {
+#endif
             if (*tok == '#') break;
             total += estimate_expanded_count(tok);
+#ifdef _WIN32
+            tok = strtok_s(NULL, " \t", &saveptr);
+#else
+            tok = strtok_r(NULL, " \t", &saveptr);
+#endif
         }
         free(lines[i]);
     }
