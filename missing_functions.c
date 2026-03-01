@@ -288,8 +288,42 @@ int saia_interactive_mode(void) {
                     printf("\n>>> 审计任务已在运行，请先停止或等待完成\n");
                     break;
                 }
-                if (g_config.threads < MIN_CONCURRENT_CONNECTIONS) g_config.threads = MIN_CONCURRENT_CONNECTIONS;
-                if (g_config.threads > 300) g_config.threads = 300;
+
+                {
+                    char input[256] = {0};
+
+                    color_cyan();
+                    printf("\n>>> 启动前配置 (留空使用当前值)\n");
+                    color_reset();
+
+                    printf("模式 [1-4] (当前 %d): ", g_config.mode);
+                    fflush(stdout);
+                    if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
+                        int mode = atoi(input);
+                        if (mode >= 1 && mode <= 4) g_config.mode = mode;
+                    }
+
+                    printf("扫描策略 [1-3] (当前 %d): ", g_config.scan_mode);
+                    fflush(stdout);
+                    if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
+                        int scan_mode = atoi(input);
+                        if (scan_mode >= 1 && scan_mode <= 3) g_config.scan_mode = scan_mode;
+                    }
+
+                    printf("并发线程 [50-300] (当前 %d): ", g_config.threads);
+                    fflush(stdout);
+                    if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
+                        int threads = atoi(input);
+                        if (threads >= MIN_CONCURRENT_CONNECTIONS && threads <= 300) {
+                            g_config.threads = threads;
+                        }
+                    }
+
+                    if (g_config.threads < MIN_CONCURRENT_CONNECTIONS) g_config.threads = MIN_CONCURRENT_CONNECTIONS;
+                    if (g_config.threads > 300) g_config.threads = 300;
+
+                    config_save(&g_config, g_config.state_file);
+                }
 
 #ifdef _WIN32
                 if (saia_start_audit_async(g_config.mode, g_config.scan_mode, g_config.threads) != 0) {
@@ -891,9 +925,9 @@ int saia_realtime_monitor(void) {
         printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line1, inner - 1, "", bdr);
 
         snprintf(line2, sizeof(line2),
-                 " %s线程:%s %-6d %s|%s %sPID:%s %-8d %s|%s %sTelegram:%s %s",
+                 " %s线程:%s %-6d %s|%s %s后台会话:%s %-8s %s|%s %sTelegram:%s %s",
                  C_WHITE, C_CYAN, g_config.threads,
-                 bdr, C_RESET, C_WHITE, C_CYAN, (int)g_state.pid,
+                 bdr, C_RESET, C_WHITE, C_CYAN, scan_running ? "RUNNING" : "STOPPED",
                  bdr, C_RESET, C_WHITE, C_CYAN,
                  g_config.telegram_enabled ? "ON" : "OFF");
         printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line2, inner - 1, "", bdr);
