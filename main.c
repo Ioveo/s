@@ -247,6 +247,13 @@ static size_t saia_count_file_lines(const char *path) {
     return lc;
 }
 
+static long long saia_file_mtime(const char *path) {
+    if (!path || !*path) return 0;
+    struct stat st;
+    if (stat(path, &st) != 0) return 0;
+    return (long long)st.st_mtime;
+}
+
 static void saia_get_last_verified_token(char *out, size_t out_size) {
     if (!out || out_size == 0) return;
     snprintf(out, out_size, "N/A");
@@ -285,6 +292,41 @@ static void saia_get_last_verified_token(char *out, size_t out_size) {
     free(lines);
 }
 
+static void saia_menu_runtime_metrics(size_t *ip_count, size_t *tk_count, char *last_tk, size_t last_tk_size) {
+    static time_t last_refresh = 0;
+    static long long nodes_mtime = 0;
+    static long long tokens_mtime = 0;
+    static long long report_mtime = 0;
+    static size_t cached_ip_count = 0;
+    static size_t cached_tk_count = 0;
+    static char cached_last_tk[128] = "N/A";
+
+    time_t now = time(NULL);
+    long long nmt = saia_file_mtime(g_config.nodes_file);
+    long long tmt = saia_file_mtime(g_config.tokens_file);
+    long long rmt = saia_file_mtime(g_config.report_file);
+
+    int need_refresh = 0;
+    if (last_refresh == 0 || (now - last_refresh) >= 3) need_refresh = 1;
+    if (nmt != nodes_mtime || tmt != tokens_mtime || rmt != report_mtime) need_refresh = 1;
+
+    if (need_refresh) {
+        cached_ip_count = saia_count_file_lines(g_config.nodes_file);
+        cached_tk_count = saia_count_file_lines(g_config.tokens_file);
+        saia_get_last_verified_token(cached_last_tk, sizeof(cached_last_tk));
+        nodes_mtime = nmt;
+        tokens_mtime = tmt;
+        report_mtime = rmt;
+        last_refresh = now;
+    }
+
+    if (ip_count) *ip_count = cached_ip_count;
+    if (tk_count) *tk_count = cached_tk_count;
+    if (last_tk && last_tk_size > 0) {
+        snprintf(last_tk, last_tk_size, "%s", cached_last_tk);
+    }
+}
+
 static void saia_menu_count_report(uint64_t *xui_found, uint64_t *xui_verified,
                                    uint64_t *s5_found, uint64_t *s5_verified,
                                    uint64_t *total_found, uint64_t *total_verified) {
@@ -318,10 +360,10 @@ int saia_print_menu(void) {
     uint64_t xui_found = 0, xui_verified = 0, s5_found = 0, s5_verified = 0, total_found = 0, total_verified = 0;
     saia_menu_count_report(&xui_found, &xui_verified, &s5_found, &s5_verified, &total_found, &total_verified);
     int scan_running = saia_menu_is_scan_running();
-    size_t ip_count = saia_count_file_lines(g_config.nodes_file);
-    size_t tk_count = saia_count_file_lines(g_config.tokens_file);
+    size_t ip_count = 0;
+    size_t tk_count = 0;
     char last_tk[128];
-    saia_get_last_verified_token(last_tk, sizeof(last_tk));
+    saia_menu_runtime_metrics(&ip_count, &tk_count, last_tk, sizeof(last_tk));
 
     char left[8][160];
     char right[8][160];

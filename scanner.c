@@ -429,6 +429,12 @@ typedef struct target_set_s {
     size_t size;
 } target_set_t;
 
+static target_set_t g_resume_cache = {0};
+static target_set_t g_history_cache = {0};
+static int g_skip_cache_ready = 0;
+static int g_skip_cache_resume_enabled = 0;
+static int g_skip_cache_history_enabled = 0;
+
 static uint32_t target_hash(const char *s) {
     uint32_t h = 2166136261u;
     while (s && *s) {
@@ -839,29 +845,45 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
     feed_ctx.port_count = port_count;
     feed_ctx.fed_count = 0;
     feed_ctx.est_total = est_total;
-    target_set_t resume_set;
-    target_set_t history_set;
-    memset(&resume_set, 0, sizeof(resume_set));
-    memset(&history_set, 0, sizeof(history_set));
-    feed_ctx.resume_done = &resume_set;
-    feed_ctx.history_done = &history_set;
+    if (!g_skip_cache_ready || g_state.total_scanned == 0) {
+        target_set_free(&g_resume_cache);
+        target_set_free(&g_history_cache);
+        memset(&g_resume_cache, 0, sizeof(g_resume_cache));
+        memset(&g_history_cache, 0, sizeof(g_history_cache));
+
+        g_skip_cache_resume_enabled = 0;
+        g_skip_cache_history_enabled = 0;
+
+        if (g_config.resume_enabled && target_set_init(&g_resume_cache, 131071) == 0) {
+            g_skip_cache_resume_enabled = 1;
+        }
+
+        if (g_skip_cache_resume_enabled) {
+            char resume_file[MAX_PATH_LENGTH];
+            snprintf(resume_file, sizeof(resume_file), "%s/resume_targets.chk", g_config.base_dir);
+            load_target_set_file(resume_file, &g_resume_cache);
+        }
+
+        if (g_config.skip_scanned && target_set_init(&g_history_cache, 131071) == 0) {
+            g_skip_cache_history_enabled = 1;
+            char history_file[MAX_PATH_LENGTH];
+            snprintf(history_file, sizeof(history_file), "%s/scanned_history.log", g_config.base_dir);
+            load_target_set_file(history_file, &g_history_cache);
+        }
+
+        g_skip_cache_ready = 1;
+    }
+
+    feed_ctx.resume_done = g_skip_cache_resume_enabled ? &g_resume_cache : NULL;
+    feed_ctx.history_done = g_skip_cache_history_enabled ? &g_history_cache : NULL;
     feed_ctx.skipped_resume = 0;
     feed_ctx.skipped_history = 0;
-    feed_ctx.enable_resume_skip = g_config.resume_enabled ? 1 : 0;
-    feed_ctx.enable_history_skip = g_config.skip_scanned ? 1 : 0;
+    feed_ctx.enable_resume_skip = g_skip_cache_resume_enabled;
+    feed_ctx.enable_history_skip = g_skip_cache_history_enabled;
     snprintf(feed_ctx.resume_checkpoint_file, sizeof(feed_ctx.resume_checkpoint_file), "%s/resume_targets.chk", g_config.base_dir);
     snprintf(feed_ctx.history_file, sizeof(feed_ctx.history_file), "%s/scanned_history.log", g_config.base_dir);
 
-    if (feed_ctx.enable_resume_skip && target_set_init(feed_ctx.resume_done, 131071) == 0) {
-        load_target_set_file(feed_ctx.resume_checkpoint_file, feed_ctx.resume_done);
-    } else if (feed_ctx.enable_resume_skip) {
-        feed_ctx.enable_resume_skip = 0;
-    }
-    if (feed_ctx.enable_history_skip && target_set_init(feed_ctx.history_done, 131071) == 0) {
-        load_target_set_file(feed_ctx.history_file, feed_ctx.history_done);
-    } else if (feed_ctx.enable_history_skip) {
-        feed_ctx.enable_history_skip = 0;
-    }
+    /* skip caches are preloaded once per audit session */
 
     for (size_t li = 0; li < raw_count && g_running && !g_reload; li++) {
         const char *line = raw_lines[li];
@@ -894,13 +916,20 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
         printf("跳过统计 -> resume:%d history:%d\n", feed_ctx.skipped_resume, feed_ctx.skipped_history);
     }
 
-    target_set_free(feed_ctx.resume_done);
-    target_set_free(feed_ctx.history_done);
+    /* keep skip caches alive across port batches */
 }
 
 // 占位符接口实现
 int scanner_init(void) { return 0; }
-void scanner_cleanup(void) { }
+void scanner_cleanup(void) {
+    target_set_free(&g_resume_cache);
+    target_set_free(&g_history_cache);
+    memset(&g_resume_cache, 0, sizeof(g_resume_cache));
+    memset(&g_history_cache, 0, sizeof(g_history_cache));
+    g_skip_cache_ready = 0;
+    g_skip_cache_resume_enabled = 0;
+    g_skip_cache_history_enabled = 0;
+}
 // scanner_run 已经被新的逻辑替代，这里仅保留兼容性
 int scanner_run(scan_target_t *target) { 
     (void)target;
