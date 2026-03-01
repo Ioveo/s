@@ -1142,15 +1142,17 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
 
     int count = 0;
     int empty_lines = 0;
-    int single_blank_to_end = (file_path && strstr(file_path, "tokens.list") != NULL);
-    int auto_finish_after_first_line = single_blank_to_end;
+    int is_tokens_file = (file_path && strstr(file_path, "tokens.list") != NULL);
+    int single_blank_to_end = is_tokens_file;
 
     while (fgets(buffer, sizeof(buffer), stdin)) {
         if (!g_running) break;
         if ((unsigned char)buffer[0] == 26) break;
 
-        char *comment = strchr(buffer, '#');
-        if (comment) *comment = '\0';
+        if (!is_tokens_file) {
+            char *comment = strchr(buffer, '#');
+            if (comment) *comment = '\0';
+        }
 
         buffer[strcspn(buffer, "\n")] = '\0';
         char *trimmed = str_trim(buffer);
@@ -1173,14 +1175,12 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
         }
         empty_lines = 0;
 
-        int line_added = 0;
         if (split_spaces) {
             char *token = strtok(trimmed, " \t\n,;|");
             while (token != NULL) {
                 if (strlen(token) > 0) {
                     fprintf(fp, "%s\n", token);
                     count++;
-                    line_added++;
                 }
                 token = strtok(NULL, " \t\n,;|");
             }
@@ -1188,12 +1188,7 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
             if (strlen(trimmed) > 0) {
                 fprintf(fp, "%s\n", trimmed);
                 count++;
-                line_added++;
             }
-        }
-
-        if (auto_finish_after_first_line && line_added > 0) {
-            break;
         }
     }
 
@@ -1491,8 +1486,8 @@ int saia_nodes_menu(void) {
             if (fgets(mode_input, sizeof(mode_input), stdin) && mode_input[0] == '2') {
                 append_mode = 1;
             }
-            printf("请一次性粘贴 token/user:pass 列表，粘贴后按一次回车即可结束（也支持 EOF/END/.）。\n");
-            int count = saia_write_tokens_single_paste(tokens_path, append_mode);
+            printf("请粘贴 token/user:pass（可多行/多次粘贴），完成后输入 EOF 结束。\n");
+            int count = saia_write_list_file_from_input(tokens_path, 1, append_mode);
             if (count >= 0) {
                 color_green();
                 printf(">>> Tokens 已%s，本次写入 %d 条\n\n", append_mode ? "追加" : "覆盖", count);

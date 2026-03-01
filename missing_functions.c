@@ -554,7 +554,7 @@ int saia_interactive_mode(void) {
                 if (fgets(mode_input, sizeof(mode_input), stdin) && mode_input[0] == '2') {
                     append_mode = 1;
                 }
-                printf("请粘贴 token/user:pass，支持空格或换行；粘贴后按一次回车即可结束（也支持 EOF/END/.）。\n");
+                printf("请粘贴 token/user:pass（支持空格/换行，可多次粘贴）；完成后输入 EOF 结束。\n");
                 int count = saia_write_list_file_from_input(tokens_path, 1, append_mode);
                 if (count >= 0) {
                     color_green();
