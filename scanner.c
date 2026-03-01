@@ -265,7 +265,24 @@ static void scanner_report_found_open(const worker_arg_t *task) {
             tag = "[PORT_OPEN]";
             detail = "端口开放(无S5特征)";
         }
-    } else if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) {
+    } else if (task->work_mode == MODE_DEEP) {
+        if (task->xui_fingerprint_ok > 0) {
+            tag = "[XUI_FOUND]";
+            detail = "端口开放 + XUI特征命中";
+        } else if (task->s5_fingerprint_ok > 0) {
+            tag = "[S5_FOUND]";
+            if (task->s5_method == 0x00) {
+                detail = "[节点-可连通] S5-OPEN";
+            } else if (task->s5_method == 0x02) {
+                detail = "[资产-加密节点] S5-AUTH";
+            } else {
+                detail = "端口开放 + S5特征命中";
+            }
+        } else {
+            tag = "[PORT_OPEN]";
+            detail = "端口开放(无XUI/S5特征)";
+        }
+    } else if (task->work_mode == MODE_XUI) {
         if (task->xui_fingerprint_ok > 0) {
             tag = "[XUI_FOUND]";
             detail = "端口开放 + XUI特征命中";
@@ -731,13 +748,31 @@ void *worker_thread(void *arg) {
         task->s5_fingerprint_ok = s5_has_required_fingerprint(task->ip, task->port, 2000, &task->s5_method);
     }
     
-    // 端口开放，记录发现
+    // 端口开放后，按模式统计“有效命中”（非纯端口开放）
+    int service_hit = 0;
     MUTEX_LOCK(lock_stats);
-    g_state.total_found++;
     if (task->work_mode == MODE_S5 && task->s5_fingerprint_ok > 0) {
+        service_hit = 1;
         g_state.s5_found++;
-    } else if ((task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) && task->xui_fingerprint_ok > 0) {
+    } else if (task->work_mode == MODE_XUI && task->xui_fingerprint_ok > 0) {
+        service_hit = 1;
         g_state.xui_found++;
+    } else if (task->work_mode == MODE_DEEP) {
+        if (task->xui_fingerprint_ok > 0) {
+            service_hit = 1;
+            g_state.xui_found++;
+        }
+        if (task->s5_fingerprint_ok > 0) {
+            service_hit = 1;
+            g_state.s5_found++;
+        }
+    } else if (task->work_mode == MODE_VERIFY) {
+        if (task->xui_fingerprint_ok > 0 || task->s5_fingerprint_ok > 0) {
+            service_hit = 1;
+        }
+    }
+    if (service_hit) {
+        g_state.total_found++;
     }
     MUTEX_UNLOCK(lock_stats);
 
