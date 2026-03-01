@@ -12,6 +12,7 @@ typedef struct verify_task_s {
     credential_t *creds;
     size_t cred_count;
     int work_mode;
+    int xui_fingerprint_ok;
     struct verify_task_s *next;
 } verify_task_t;
 
@@ -237,17 +238,30 @@ typedef struct {
     credential_t *creds;
     size_t cred_count;
     int work_mode;
+    int xui_fingerprint_ok;
 } worker_arg_t;
 
 static void scanner_report_found_open(const worker_arg_t *task) {
     if (!task) return;
     char result_line[1024];
-    const char *tag = (task->work_mode == MODE_S5) ? "[S5_FOUND]" :
-                      (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) ? "[XUI_FOUND]" :
-                      "[PORT_OPEN]";
+    const char *tag = "[PORT_OPEN]";
+    const char *detail = "端口开放";
+
+    if (task->work_mode == MODE_S5) {
+        tag = "[S5_FOUND]";
+    } else if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) {
+        if (task->xui_fingerprint_ok > 0) {
+            tag = "[XUI_FOUND]";
+            detail = "端口开放 + XUI特征命中";
+        } else {
+            tag = "[PORT_OPEN]";
+            detail = "端口开放(无XUI特征)";
+        }
+    }
+
     snprintf(result_line, sizeof(result_line),
-             "%s %s:%d | 端口开放",
-             tag, task->ip, task->port);
+             "%s %s:%d | %s",
+             tag, task->ip, task->port, detail);
     MUTEX_LOCK(lock_file);
     file_append(g_config.report_file, result_line);
     file_append(g_config.report_file, "\n");
@@ -349,8 +363,9 @@ static int xui_has_required_fingerprint(const char *ip, uint16_t port, int timeo
 static void scanner_run_verify_logic(const verify_task_t *task) {
     if (!task) return;
 
-    int xui_fingerprint_ok = -1;
-    if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY) {
+    int xui_fingerprint_ok = task->xui_fingerprint_ok;
+    if (xui_fingerprint_ok < 0 &&
+        (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY)) {
         xui_fingerprint_ok = xui_has_required_fingerprint(task->ip, task->port, 3000);
     }
 
@@ -494,6 +509,7 @@ static void scanner_enqueue_verify_task(const worker_arg_t *task) {
     vt->creds = task->creds;
     vt->cred_count = task->cred_count;
     vt->work_mode = task->work_mode;
+    vt->xui_fingerprint_ok = task->xui_fingerprint_ok;
 
     MUTEX_LOCK(lock_stats);
     vt->next = NULL;
@@ -624,13 +640,18 @@ void *worker_thread(void *arg) {
         #endif
     }
     socket_close(fd);
+
+    task->xui_fingerprint_ok = -1;
+    if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY) {
+        task->xui_fingerprint_ok = xui_has_required_fingerprint(task->ip, task->port, 2000);
+    }
     
-        // 端口开放，记录发现
+    // 端口开放，记录发现
     MUTEX_LOCK(lock_stats);
     g_state.total_found++;
     if (task->work_mode == MODE_S5) {
         g_state.s5_found++;
-    } else if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) {
+    } else if ((task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) && task->xui_fingerprint_ok > 0) {
         g_state.xui_found++;
     }
     MUTEX_UNLOCK(lock_stats);
@@ -641,8 +662,12 @@ void *worker_thread(void *arg) {
     scanner_report_found_open(task);
 
     if (do_verify) {
-        scanner_enqueue_verify_task(task);
-        scanner_pump_verify_workers();
+        if (task->work_mode == MODE_XUI && task->xui_fingerprint_ok <= 0) {
+            scanner_set_progress_token(task->ip, task->port, "-", "-");
+        } else {
+            scanner_enqueue_verify_task(task);
+            scanner_pump_verify_workers();
+        }
     } else {
         scanner_set_progress_token(task->ip, task->port, "-", "-");
     }
@@ -877,6 +902,7 @@ static int feed_single_target(const char *ip, void *userdata) {
         arg->creds = ctx->creds;
         arg->cred_count = ctx->cred_count;
         arg->work_mode = g_config.mode;
+        arg->xui_fingerprint_ok = -1;
 
         MUTEX_LOCK(lock_stats);
         running_threads++;
@@ -1087,6 +1113,7 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
             arg->creds = creds;
             arg->cred_count = cred_count;
             arg->work_mode = g_config.mode;
+            arg->xui_fingerprint_ok = -1;
             
             MUTEX_LOCK(lock_stats);
             running_threads++;
