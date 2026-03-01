@@ -220,6 +220,71 @@ static const char *saia_menu_spinner(int running) {
     return frames[(int)(now % 4)];
 }
 
+static void saia_fit_line(const char *src, char *dst, size_t dst_size, size_t max_len) {
+    if (!dst || dst_size == 0) return;
+    if (!src) {
+        dst[0] = '\0';
+        return;
+    }
+    size_t n = strlen(src);
+    if (n <= max_len) {
+        snprintf(dst, dst_size, "%s", src);
+        return;
+    }
+    if (max_len <= 3) {
+        snprintf(dst, dst_size, "%.*s", (int)max_len, src);
+        return;
+    }
+    snprintf(dst, dst_size, "%.*s...", (int)(max_len - 3), src);
+}
+
+static size_t saia_count_file_lines(const char *path) {
+    char **lines = NULL;
+    size_t lc = 0;
+    if (file_read_lines(path, &lines, &lc) != 0 || !lines) return 0;
+    for (size_t i = 0; i < lc; i++) free(lines[i]);
+    free(lines);
+    return lc;
+}
+
+static void saia_get_last_verified_token(char *out, size_t out_size) {
+    if (!out || out_size == 0) return;
+    snprintf(out, out_size, "N/A");
+
+    char **lines = NULL;
+    size_t lc = 0;
+    if (file_read_lines(g_config.report_file, &lines, &lc) != 0 || !lines) return;
+
+    for (long i = (long)lc - 1; i >= 0; i--) {
+        const char *s = lines[i] ? lines[i] : "";
+        if (strstr(s, "VERIFIED") == NULL) continue;
+
+        const char *u = strstr(s, "账号:");
+        const char *p = strstr(s, "密码:");
+        if (u && p) {
+            u += strlen("账号:");
+            while (*u == ' ') u++;
+            char user[64] = {0};
+            char pass[64] = {0};
+            sscanf(u, "%63[^| ]", user);
+            p += strlen("密码:");
+            while (*p == ' ') p++;
+            sscanf(p, "%63[^| ]", pass);
+            if (user[0]) {
+                if (pass[0]) {
+                    snprintf(out, out_size, "%s:%.*s***", user, 2, pass);
+                } else {
+                    snprintf(out, out_size, "%s:***", user);
+                }
+                break;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < lc; i++) free(lines[i]);
+    free(lines);
+}
+
 static void saia_menu_count_report(uint64_t *xui_found, uint64_t *xui_verified,
                                    uint64_t *s5_found, uint64_t *s5_verified,
                                    uint64_t *total_found, uint64_t *total_verified) {
@@ -253,6 +318,10 @@ int saia_print_menu(void) {
     uint64_t xui_found = 0, xui_verified = 0, s5_found = 0, s5_verified = 0, total_found = 0, total_verified = 0;
     saia_menu_count_report(&xui_found, &xui_verified, &s5_found, &s5_verified, &total_found, &total_verified);
     int scan_running = saia_menu_is_scan_running();
+    size_t ip_count = saia_count_file_lines(g_config.nodes_file);
+    size_t tk_count = saia_count_file_lines(g_config.tokens_file);
+    char last_tk[128];
+    saia_get_last_verified_token(last_tk, sizeof(last_tk));
 
     char left[8][160];
     char right[8][160];
@@ -267,12 +336,20 @@ int saia_print_menu(void) {
 
     snprintf(right[0], sizeof(right[0]), "MONITOR DETAIL | 运行细节 %s", saia_menu_spinner(scan_running));
     snprintf(right[1], sizeof(right[1]), "后台会话: %s", scan_running ? "saia_scan RUNNING" : "NOT FOUND");
-    snprintf(right[2], sizeof(right[2]), "工作目录: %s", g_config.base_dir);
-    snprintf(right[3], sizeof(right[3]), "报告文件: %s", g_config.report_file);
+    snprintf(right[2], sizeof(right[2]), "IP数: %zu | TK数: %zu", ip_count, tk_count);
+    snprintf(right[3], sizeof(right[3]), "最近命中TK: %s", last_tk);
     snprintf(right[4], sizeof(right[4]), "压背: %s", g_config.backpressure.enabled ? "ON" : "OFF");
     snprintf(right[5], sizeof(right[5]), "限流状态: %s", g_config.backpressure.is_throttled ? "THROTTLED" : "NORMAL");
     snprintf(right[6], sizeof(right[6]), "连接: %d/%d", g_config.backpressure.current_connections, g_config.backpressure.max_connections);
     snprintf(right[7], sizeof(right[7]), "每1秒自动刷新，可直接输入菜单号");
+
+    for (int i = 0; i < 8; i++) {
+        char fit[160];
+        saia_fit_line(left[i], fit, sizeof(fit), (size_t)(inner - 4));
+        snprintf(left[i], sizeof(left[i]), "%s", fit);
+        saia_fit_line(right[i], fit, sizeof(fit), (size_t)(inner - 4));
+        snprintf(right[i], sizeof(right[i]), "%s", fit);
+    }
 
     printf("%s┏", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┓  %s┏", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┓%s\n", C_RESET);
     printf("%s┃ %-*s ┃  %s┃ %-*s ┃%s\n", bdr, inner - 2, left[0], bdr, inner - 2, right[0], C_RESET);

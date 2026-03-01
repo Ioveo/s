@@ -77,6 +77,65 @@ static int saia_count_report_stats(const char *report_path,
     return 0;
 }
 
+static void saia_dash_fit_line(const char *src, char *dst, size_t dst_size, size_t max_len) {
+    if (!dst || dst_size == 0) return;
+    if (!src) { dst[0] = '\0'; return; }
+    size_t n = strlen(src);
+    if (n <= max_len) {
+        snprintf(dst, dst_size, "%s", src);
+        return;
+    }
+    if (max_len <= 3) {
+        snprintf(dst, dst_size, "%.*s", (int)max_len, src);
+        return;
+    }
+    snprintf(dst, dst_size, "%.*s...", (int)(max_len - 3), src);
+}
+
+static size_t saia_dash_count_file_lines(const char *path) {
+    char **lines = NULL;
+    size_t lc = 0;
+    if (file_read_lines(path, &lines, &lc) != 0 || !lines) return 0;
+    for (size_t i = 0; i < lc; i++) free(lines[i]);
+    free(lines);
+    return lc;
+}
+
+static void saia_dash_last_verified_token(char *out, size_t out_size) {
+    if (!out || out_size == 0) return;
+    snprintf(out, out_size, "N/A");
+
+    char **lines = NULL;
+    size_t lc = 0;
+    if (file_read_lines(g_config.report_file, &lines, &lc) != 0 || !lines) return;
+
+    for (long i = (long)lc - 1; i >= 0; i--) {
+        const char *s = lines[i] ? lines[i] : "";
+        if (strstr(s, "VERIFIED") == NULL) continue;
+
+        const char *u = strstr(s, "账号:");
+        const char *p = strstr(s, "密码:");
+        if (u && p) {
+            u += strlen("账号:");
+            while (*u == ' ') u++;
+            char user[64] = {0};
+            char pass[64] = {0};
+            sscanf(u, "%63[^| ]", user);
+            p += strlen("密码:");
+            while (*p == ' ') p++;
+            sscanf(p, "%63[^| ]", pass);
+            if (user[0]) {
+                if (pass[0]) snprintf(out, out_size, "%s:%.*s***", user, 2, pass);
+                else snprintf(out, out_size, "%s:***", user);
+                break;
+            }
+        }
+    }
+
+    for (size_t i = 0; i < lc; i++) free(lines[i]);
+    free(lines);
+}
+
 #ifdef _WIN32
 static unsigned __stdcall saia_audit_thread_entry(void *arg) {
 #else
@@ -929,6 +988,10 @@ int saia_realtime_monitor(void) {
         uint64_t s5_verified = g_state.s5_verified;
         uint64_t total_found = g_state.total_found;
         uint64_t total_verified = g_state.total_verified;
+        size_t ip_count = saia_dash_count_file_lines(g_config.nodes_file);
+        size_t tk_count = saia_dash_count_file_lines(g_config.tokens_file);
+        char last_tk[128];
+        saia_dash_last_verified_token(last_tk, sizeof(last_tk));
         saia_count_report_stats(g_config.report_file,
                                 &xui_found, &xui_verified,
                                 &s5_found, &s5_verified,
@@ -943,16 +1006,24 @@ int saia_realtime_monitor(void) {
         snprintf(left[4], sizeof(left[4]), "XUI 发现/验真:%llu/%llu", (unsigned long long)xui_found, (unsigned long long)xui_verified);
         snprintf(left[5], sizeof(left[5]), "S5 发现/验真:%llu/%llu", (unsigned long long)s5_found, (unsigned long long)s5_verified);
         snprintf(left[6], sizeof(left[6]), "线程:%d | 会话:%s", g_config.threads, scan_running ? "RUNNING" : "STOPPED");
-        snprintf(left[7], sizeof(left[7]), "报告: %s", g_config.report_file);
+        snprintf(left[7], sizeof(left[7]), "IP数:%zu | TK数:%zu", ip_count, tk_count);
 
         snprintf(right[0], sizeof(right[0]), "MONITOR DETAIL | 运行细节 %s", saia_dash_spinner(scan_running));
         snprintf(right[1], sizeof(right[1]), "压背: %s", g_config.backpressure.enabled ? "ON" : "OFF");
         snprintf(right[2], sizeof(right[2]), "CPU: %.1f%% | MEM_FREE: %.0fMB", g_config.backpressure.current_cpu, g_config.backpressure.current_mem);
         snprintf(right[3], sizeof(right[3]), "连接: %d/%d", g_config.backpressure.current_connections, g_config.backpressure.max_connections);
         snprintf(right[4], sizeof(right[4]), "限流: %s", g_config.backpressure.is_throttled ? "ON" : "OFF");
-        snprintf(right[5], sizeof(right[5]), "PID: %d", (int)g_state.pid);
-        snprintf(right[6], sizeof(right[6]), "工作目录: %s", g_config.base_dir);
+        snprintf(right[5], sizeof(right[5]), "PID: %d | 最近命中TK: %s", (int)g_state.pid, last_tk);
+        snprintf(right[6], sizeof(right[6]), "报告: %s", g_config.report_file);
         snprintf(right[7], sizeof(right[7]), "每2秒刷新，Enter/q返回");
+
+        for (int i = 0; i < 8; i++) {
+            char fit[180];
+            saia_dash_fit_line(left[i], fit, sizeof(fit), (size_t)(inner - 4));
+            snprintf(left[i], sizeof(left[i]), "%s", fit);
+            saia_dash_fit_line(right[i], fit, sizeof(fit), (size_t)(inner - 4));
+            snprintf(right[i], sizeof(right[i]), "%s", fit);
+        }
 
         printf("%s┏", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┓  %s┏", bdr); for (int i = 0; i < inner; i++) printf("━"); printf("┓%s\n", C_RESET);
         printf("%s┃ %-*s ┃  %s┃ %-*s ┃%s\n", bdr, inner - 2, left[0], bdr, inner - 2, right[0], C_RESET);
