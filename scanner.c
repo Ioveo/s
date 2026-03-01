@@ -465,7 +465,7 @@ static void write_scan_progress(feed_context_t *ctx, const char *status) {
              threads_now,
              ctx->current_ip[0] ? ctx->current_ip : "-",
              (unsigned)ctx->current_port,
-             (unsigned long long)get_timestamp_ms());
+             (unsigned long long)get_current_time_ms());
 
     MUTEX_LOCK(lock_file);
     file_write_all(ctx->progress_file, payload);
