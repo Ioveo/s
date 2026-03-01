@@ -216,6 +216,44 @@ static void saia_dash_runtime_metrics(size_t *ip_count, size_t *tk_count, size_t
     }
 }
 
+typedef struct {
+    int ok;
+    char status[32];
+    size_t est_total;
+    size_t fed;
+    uint64_t scanned;
+    uint64_t found;
+    int threads;
+    char current_ip[64];
+    int current_port;
+} dash_progress_t;
+
+static void saia_dash_load_progress(dash_progress_t *p) {
+    if (!p) return;
+    memset(p, 0, sizeof(*p));
+    snprintf(p->status, sizeof(p->status), "N/A");
+    snprintf(p->current_ip, sizeof(p->current_ip), "-");
+
+    char path[MAX_PATH_LENGTH];
+    snprintf(path, sizeof(path), "%s/scan_progress.dat", g_config.base_dir);
+    char *raw = file_read_all(path);
+    if (!raw) return;
+
+    char *line = strtok(raw, "\r\n");
+    while (line) {
+        if (strncmp(line, "status=", 7) == 0) { snprintf(p->status, sizeof(p->status), "%s", line + 7); p->ok = 1; }
+        else if (strncmp(line, "est_total=", 10) == 0) p->est_total = (size_t)strtoull(line + 10, NULL, 10);
+        else if (strncmp(line, "fed=", 4) == 0) p->fed = (size_t)strtoull(line + 4, NULL, 10);
+        else if (strncmp(line, "scanned=", 8) == 0) p->scanned = (uint64_t)strtoull(line + 8, NULL, 10);
+        else if (strncmp(line, "found=", 6) == 0) p->found = (uint64_t)strtoull(line + 6, NULL, 10);
+        else if (strncmp(line, "threads=", 8) == 0) p->threads = atoi(line + 8);
+        else if (strncmp(line, "current_ip=", 11) == 0) snprintf(p->current_ip, sizeof(p->current_ip), "%s", line + 11);
+        else if (strncmp(line, "current_port=", 13) == 0) p->current_port = atoi(line + 13);
+        line = strtok(NULL, "\r\n");
+    }
+    free(raw);
+}
+
 #ifdef _WIN32
 static unsigned __stdcall saia_audit_thread_entry(void *arg) {
 #else
@@ -1084,6 +1122,8 @@ int saia_realtime_monitor(void) {
         size_t ip_lines = 0;
         char last_tk[128];
         saia_dash_runtime_metrics(&ip_count, &tk_count, &ip_lines, last_tk, sizeof(last_tk));
+        dash_progress_t pg;
+        saia_dash_load_progress(&pg);
         saia_count_report_stats(g_config.report_file,
                                 &xui_found, &xui_verified,
                                 &s5_found, &s5_verified,
@@ -1103,10 +1143,10 @@ int saia_realtime_monitor(void) {
         snprintf(right[0], sizeof(right[0]), "运行细节 %s", saia_dash_spinner(scan_running));
         snprintf(right[1], sizeof(right[1]), "压背: %s", g_config.backpressure.enabled ? "开" : "关");
         snprintf(right[2], sizeof(right[2]), "CPU: %.1f%% | MEM_FREE: %.0fMB", g_config.backpressure.current_cpu, g_config.backpressure.current_mem);
-        snprintf(right[3], sizeof(right[3]), "连接: %d/%d", g_config.backpressure.current_connections, g_config.backpressure.max_connections);
-        snprintf(right[4], sizeof(right[4]), "限流: %s", g_config.backpressure.is_throttled ? "是" : "否");
-        snprintf(right[5], sizeof(right[5]), "PID:%d | 最近命中TK:%s", (int)g_state.pid, last_tk);
-        snprintf(right[6], sizeof(right[6]), "报告: %s", g_config.report_file);
+        snprintf(right[3], sizeof(right[3]), "解析:%zu/%zu 已扫:%llu 命中:%llu", pg.fed, pg.est_total, (unsigned long long)pg.scanned, (unsigned long long)pg.found);
+        snprintf(right[4], sizeof(right[4]), "当前目标: %s:%d", pg.current_ip, pg.current_port);
+        snprintf(right[5], sizeof(right[5]), "限流: %s", g_config.backpressure.is_throttled ? "是" : "否");
+        snprintf(right[6], sizeof(right[6]), "PID:%d | 最近命中TK:%s", (int)g_state.pid, last_tk);
         snprintf(right[7], sizeof(right[7]), "每2秒刷新，Enter/q返回");
 
         for (int i = 0; i < 8; i++) {

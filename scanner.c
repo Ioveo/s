@@ -416,6 +416,9 @@ typedef struct {
     int enable_history_skip;
     char resume_checkpoint_file[MAX_PATH_LENGTH];
     char history_file[MAX_PATH_LENGTH];
+    char progress_file[MAX_PATH_LENGTH];
+    char current_ip[64];
+    uint16_t current_port;
 } feed_context_t;
 
 typedef struct target_node_s {
@@ -434,6 +437,40 @@ static target_set_t g_history_cache = {0};
 static int g_skip_cache_ready = 0;
 static int g_skip_cache_resume_enabled = 0;
 static int g_skip_cache_history_enabled = 0;
+
+static void write_scan_progress(feed_context_t *ctx, const char *status) {
+    if (!ctx || !ctx->progress_file[0]) return;
+    char payload[1024];
+    MUTEX_LOCK(lock_stats);
+    uint64_t scanned = g_state.total_scanned;
+    uint64_t found = g_state.total_found;
+    int threads_now = running_threads;
+    MUTEX_UNLOCK(lock_stats);
+
+    snprintf(payload, sizeof(payload),
+             "status=%s\n"
+             "est_total=%zu\n"
+             "fed=%zu\n"
+             "scanned=%llu\n"
+             "found=%llu\n"
+             "threads=%d\n"
+             "current_ip=%s\n"
+             "current_port=%u\n"
+             "updated=%llu\n",
+             status ? status : "running",
+             ctx->est_total,
+             ctx->fed_count,
+             (unsigned long long)scanned,
+             (unsigned long long)found,
+             threads_now,
+             ctx->current_ip[0] ? ctx->current_ip : "-",
+             (unsigned)ctx->current_port,
+             (unsigned long long)get_timestamp_ms());
+
+    MUTEX_LOCK(lock_file);
+    file_write_all(ctx->progress_file, payload);
+    MUTEX_UNLOCK(lock_file);
+}
 
 static uint32_t target_hash(const char *s) {
     uint32_t h = 2166136261u;
@@ -522,6 +559,9 @@ static int feed_single_target(const char *ip, void *userdata) {
     feed_context_t *ctx = (feed_context_t *)userdata;
     if (!ip || !*ip || !ctx) return 0;
 
+    strncpy(ctx->current_ip, ip, sizeof(ctx->current_ip) - 1);
+    ctx->current_ip[sizeof(ctx->current_ip) - 1] = '\0';
+
     if (ctx->enable_resume_skip && target_set_contains(ctx->resume_done, ip)) {
         ctx->skipped_resume++;
         return 0;
@@ -532,6 +572,7 @@ static int feed_single_target(const char *ip, void *userdata) {
     }
 
     for (size_t p = 0; p < ctx->port_count && g_running && !g_reload; p++) {
+        ctx->current_port = ctx->ports[p];
         while (g_running && !g_reload) {
             if (g_config.backpressure.enabled) {
                 backpressure_update(&g_config.backpressure);
@@ -610,6 +651,7 @@ static int feed_single_target(const char *ip, void *userdata) {
                (unsigned long long)found,
                C_RESET);
         fflush(stdout);
+        write_scan_progress(ctx, "running");
     }
     return (g_running && !g_reload) ? 0 : -1;
 }
@@ -882,8 +924,12 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
     feed_ctx.enable_history_skip = g_skip_cache_history_enabled;
     snprintf(feed_ctx.resume_checkpoint_file, sizeof(feed_ctx.resume_checkpoint_file), "%s/resume_targets.chk", g_config.base_dir);
     snprintf(feed_ctx.history_file, sizeof(feed_ctx.history_file), "%s/scanned_history.log", g_config.base_dir);
+    snprintf(feed_ctx.progress_file, sizeof(feed_ctx.progress_file), "%s/scan_progress.dat", g_config.base_dir);
+    feed_ctx.current_ip[0] = '\0';
+    feed_ctx.current_port = 0;
 
     /* skip caches are preloaded once per audit session */
+    write_scan_progress(&feed_ctx, "running");
 
     for (size_t li = 0; li < raw_count && g_running && !g_reload; li++) {
         const char *line = raw_lines[li];
@@ -911,6 +957,7 @@ void scanner_start_streaming(char **raw_lines, size_t raw_count,
     }
 
     printf("\n扫描结束\n");
+    write_scan_progress(&feed_ctx, (g_running && !g_reload) ? "completed" : "stopped");
 
     if (feed_ctx.skipped_resume > 0 || feed_ctx.skipped_history > 0) {
         printf("跳过统计 -> resume:%d history:%d\n", feed_ctx.skipped_resume, feed_ctx.skipped_history);
