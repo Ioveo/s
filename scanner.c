@@ -241,6 +241,11 @@ void *worker_thread(void *arg) {
         // 端口开放，记录发现
     MUTEX_LOCK(lock_stats);
     g_state.total_found++;
+    if (task->work_mode == MODE_S5) {
+        g_state.s5_found++;
+    } else if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) {
+        g_state.xui_found++;
+    }
     MUTEX_UNLOCK(lock_stats);
 
     /* scan_mode: 1=探索(只扫描存活), 2=探索+验真, 3=只留极品(只保留验证通过的) */
@@ -271,6 +276,7 @@ void *worker_thread(void *arg) {
                 
                 MUTEX_LOCK(lock_stats);
                 g_state.total_verified++;
+                g_state.s5_verified++;
                 MUTEX_UNLOCK(lock_stats);
                 
                 // 记录结果
@@ -302,6 +308,7 @@ void *worker_thread(void *arg) {
                            task->creds[i].username, task->creds[i].password, 3000)) {
                 MUTEX_LOCK(lock_stats);
                 g_state.total_verified++;
+                g_state.xui_verified++;
                 MUTEX_UNLOCK(lock_stats);
 
                 char result_line[1024];
@@ -332,6 +339,7 @@ void *worker_thread(void *arg) {
                                    task->creds[i].username, task->creds[i].password, 3000)) {
                     MUTEX_LOCK(lock_stats);
                     g_state.total_verified++;
+                    g_state.s5_verified++;
                     MUTEX_UNLOCK(lock_stats);
                     char result_line[1024];
                     snprintf(result_line, sizeof(result_line),

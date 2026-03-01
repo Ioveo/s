@@ -327,45 +327,45 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     // 选择模式
 
-    printf("\n模式选择:\n");
-
+    color_cyan();
+    printf("\n[开始审计] 请选择工作模式\n");
+    color_reset();
     printf("  1. XUI专项 (扫描XUI面板)\n");
-
     printf("  2. S5专项 (扫描SOCKS5代理)\n");
-
     printf("  3. 深度全能 (全面扫描)\n");
-
     printf("  4. 验真模式 (只验证已知节点)\n");
-
-    printf("模式 [1-4]: ");
-
+    printf("模式 [1-4] (默认 1): ");
     fflush(stdout);
-
-    scanf("%d", &mode);
+    mode = 1;
+    if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
+        mode = atoi(input);
+    }
+    if (mode < 1 || mode > 4) mode = 1;
 
     // 选择扫描模式
 
-    printf("\n扫描模式:\n");
-
+    color_cyan();
+    printf("\n[开始审计] 请选择扫描策略\n");
+    color_reset();
     printf("  1. 探索 (只扫描存活)\n");
-
     printf("  2. 探索+验真 (扫描并验证)\n");
-
     printf("  3. 只留极品 (只保留可用)\n");
-
-    printf("模式 [1-3]: ");
-
+    printf("模式 [1-3] (默认 2): ");
     fflush(stdout);
-
-    scanf("%d", &scan_mode);
+    scan_mode = 2;
+    if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
+        scan_mode = atoi(input);
+    }
+    if (scan_mode < 1 || scan_mode > 3) scan_mode = 2;
 
     // 线程数
 
-    printf("\n并发线程数 [50-2000]: ");
-
+    printf("\n并发线程数 [50-2000] (默认 200): ");
     fflush(stdout);
-
-    scanf("%d", &threads);
+    threads = 200;
+    if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
+        threads = atoi(input);
+    }
 
     if (threads < MIN_CONCURRENT_CONNECTIONS) threads = MIN_CONCURRENT_CONNECTIONS;
 
@@ -385,8 +385,6 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
                C_DIM, 60, hint, C_RESET);
         fflush(stdout);
     }
-    while (getchar() != '\n');  /* 清除之前的输入 */
-
     if (fgets(input, sizeof(input), stdin)) {
 
         input[strcspn(input, "\n")] = '\0';
@@ -639,16 +637,35 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads)
 
     g_state.total_verified = 0;
 
+    g_state.xui_found = 0;
+
+    g_state.xui_verified = 0;
+
+    g_state.s5_found = 0;
+
+    g_state.s5_verified = 0;
+
     // 流式展开 IP 段并投喂线程池 (对齐 DEJI.py 的 iter_expanded_targets 逐步投喂逻辑)
 
-    scanner_start_streaming(raw_nodes, raw_node_count, creds, cred_count, ports, port_count);
-
-    if (g_reload) {
-        strcpy(g_state.status, "manual_stopped");
-        g_reload = 0;
+    if (port_count > 5) {
+        for (size_t i = 0; i < port_count && g_running && !g_reload; i += 5) {
+            size_t chunk = port_count - i;
+            if (chunk > 5) chunk = 5;
+            printf("\n%s[端口分批]%s 第 %zu 批: 端口 %zu-%zu / %zu\n",
+                   C_CYAN, C_RESET,
+                   (i / 5) + 1,
+                   i + 1,
+                   i + chunk,
+                   port_count);
+            scanner_start_streaming(raw_nodes, raw_node_count,
+                                    creds, cred_count,
+                                    ports + i, chunk);
+        }
     } else {
-        strcpy(g_state.status, "completed");
+        scanner_start_streaming(raw_nodes, raw_node_count, creds, cred_count, ports, port_count);
     }
+
+    strcpy(g_state.status, "completed");
 
     // 清理数据
 
@@ -774,6 +791,81 @@ int saia_report_menu(void) {
 
     return 0;
 
+}
+
+static int saia_remove_file_if_exists(const char *path) {
+    if (!path || !*path) return 0;
+    if (file_exists(path)) {
+        if (file_remove(path) == 0) return 1;
+    }
+    return 0;
+}
+
+static int saia_cleanup_runtime_files(const char *base_dir) {
+    if (!base_dir || !*base_dir) return 0;
+
+    int removed = 0;
+    char path[MAX_PATH_LENGTH];
+
+    const char *runtime_files[] = {
+        "sys_audit_state.json",
+        "sys_audit_events.log",
+        "audit_report.log",
+        "sys_guardian_state.json",
+        "guardian_runner.lock",
+        "guardian_control.json",
+        "manual_launch_token.json",
+        "audit_checkpoint.json",
+        "verified_events.log",
+        "audit_runner.lock"
+    };
+
+    for (size_t i = 0; i < sizeof(runtime_files) / sizeof(runtime_files[0]); i++) {
+        snprintf(path, sizeof(path), "%s/%s", base_dir, runtime_files[i]);
+        removed += saia_remove_file_if_exists(path);
+    }
+
+    for (int i = 1; i <= 5; i++) {
+        snprintf(path, sizeof(path), "%s/sys_audit_events.log.%d", base_dir, i);
+        removed += saia_remove_file_if_exists(path);
+    }
+
+    for (int i = 1; i <= 3; i++) {
+        snprintf(path, sizeof(path), "%s/audit_report.log.%d", base_dir, i);
+        removed += saia_remove_file_if_exists(path);
+    }
+
+    for (int i = 1; i <= 2; i++) {
+        snprintf(path, sizeof(path), "%s/verified_events.log.%d", base_dir, i);
+        removed += saia_remove_file_if_exists(path);
+    }
+
+    return removed;
+}
+
+static int saia_cleanup_profile_files(const char *base_dir) {
+    if (!base_dir || !*base_dir) return 0;
+
+    int removed = 0;
+    char path[MAX_PATH_LENGTH];
+
+    const char *profile_files[] = {
+        "nodes.list",
+        "ip.txt",
+        "IP.TXT",
+        "tokens.list",
+        "pass.txt",
+        "telegram_notify.json",
+        "resume_config.json",
+        "feed_turbo_config.json"
+    };
+
+    for (size_t i = 0; i < sizeof(profile_files) / sizeof(profile_files[0]); i++) {
+        snprintf(path, sizeof(path), "%s/%s", base_dir, profile_files[i]);
+        removed += saia_remove_file_if_exists(path);
+    }
+
+    return removed;
 }
 
 // ==================== 辅助输入函数 ====================
@@ -957,16 +1049,76 @@ int saia_nodes_menu(void) {
         case 3:
             saia_realtime_monitor();
             break;
-        case 4:
-            color_yellow();
-            printf("\n>>> [4] XUI 面板查看 (未实现/TODO)\n");
+        case 4: {
+            color_cyan();
+            printf("\n>>> [4] XUI 面板查看\n");
             color_reset();
+
+            char report_path[MAX_PATH_LENGTH];
+            snprintf(report_path, sizeof(report_path), "%s/audit_report.log", g_config.base_dir);
+
+            char **lines = NULL;
+            size_t lc = 0;
+            if (file_read_lines(report_path, &lines, &lc) == 0 && lc > 0) {
+                int found = 0;
+                int verified = 0;
+                for (size_t i = 0; i < lc; i++) {
+                    if (!lines[i]) continue;
+                    if (strstr(lines[i], "[XUI_FOUND]") || strstr(lines[i], "[XUI_VERIFIED]")) {
+                        printf("  %s\n", lines[i]);
+                        found++;
+                        if (strstr(lines[i], "[XUI_VERIFIED]")) verified++;
+                    }
+                }
+
+                if (!found) {
+                    printf("  暂无 XUI 审计记录\n");
+                } else {
+                    printf("\n  XUI 记录: %d 条, 验真成功: %d 条\n", found, verified);
+                }
+
+                for (size_t i = 0; i < lc; i++) free(lines[i]);
+                free(lines);
+            } else {
+                printf("  暂无审计报告\n");
+            }
             break;
-        case 5:
-            color_yellow();
-            printf("\n>>> [5] S5 面板查看 (未实现/TODO)\n");
+        }
+        case 5: {
+            color_cyan();
+            printf("\n>>> [5] S5 面板查看\n");
             color_reset();
+
+            char report_path[MAX_PATH_LENGTH];
+            snprintf(report_path, sizeof(report_path), "%s/audit_report.log", g_config.base_dir);
+
+            char **lines = NULL;
+            size_t lc = 0;
+            if (file_read_lines(report_path, &lines, &lc) == 0 && lc > 0) {
+                int found = 0;
+                int verified = 0;
+                for (size_t i = 0; i < lc; i++) {
+                    if (!lines[i]) continue;
+                    if (strstr(lines[i], "[S5_FOUND]") || strstr(lines[i], "[S5_VERIFIED]")) {
+                        printf("  %s\n", lines[i]);
+                        found++;
+                        if (strstr(lines[i], "[S5_VERIFIED]")) verified++;
+                    }
+                }
+
+                if (!found) {
+                    printf("  暂无 S5 审计记录\n");
+                } else {
+                    printf("\n  S5 记录: %d 条, 验真成功: %d 条\n", found, verified);
+                }
+
+                for (size_t i = 0; i < lc; i++) free(lines[i]);
+                free(lines);
+            } else {
+                printf("  暂无审计报告\n");
+            }
             break;
+        }
         case 6:
             color_yellow();
             printf("\n>>> [6] 小鸡资源展示 (未实现/TODO)\n");
@@ -1013,32 +1165,142 @@ int saia_nodes_menu(void) {
             }
             break;
         }
-        case 14:
-            color_yellow();
-            printf("\n>>> [14] 更新 Tokens (未实现/TODO)\n");
+        case 14: {
+            char tokens_path[MAX_PATH_LENGTH];
+            snprintf(tokens_path, sizeof(tokens_path), "%s/tokens.list", g_config.base_dir);
+            color_cyan();
+            printf("\n>>> [14] 更新 Tokens\n");
             color_reset();
+            printf("请逐行输入 user:pass 或 token (输入 EOF 结束):\n");
+            int count = saia_write_list_file_from_input(tokens_path, 0, 0);
+            if (count >= 0) {
+                color_green();
+                printf(">>> Tokens 已更新，本次写入 %d 条\n\n", count);
+                color_reset();
+            } else {
+                color_red();
+                printf(">>> 写入失败或已取消\n");
+                color_reset();
+            }
             break;
+        }
         case 15:
             saia_report_menu();
             break;
         case 16:
             saia_cleanup_menu();
             break;
-        case 17:
-            color_yellow();
-            printf("\n>>> [17] 无 L7 列表 (未实现/TODO)\n");
+        case 17: {
+            color_cyan();
+            printf("\n>>> [17] 疑似无L7能力列表\n");
             color_reset();
+
+            int found = 0;
+            int has_any_report = 0;
+            char report_path[MAX_PATH_LENGTH];
+            for (int bi = 3; bi >= 0; bi--) {
+                if (bi == 0) {
+                    snprintf(report_path, sizeof(report_path), "%s/audit_report.log", g_config.base_dir);
+                } else {
+                    snprintf(report_path, sizeof(report_path), "%s/audit_report.log.%d", g_config.base_dir, bi);
+                }
+
+                char **lines = NULL;
+                size_t lc = 0;
+                if (file_read_lines(report_path, &lines, &lc) == 0 && lc > 0) {
+                    has_any_report = 1;
+                    for (size_t i = 0; i < lc; i++) {
+                        if (!lines[i]) continue;
+                        if (strstr(lines[i], "NO_L7") ||
+                            strstr(lines[i], "无L7能力") ||
+                            strstr(lines[i], "疑似无L7")) {
+                            printf("  %s\n", lines[i]);
+                            found++;
+                        }
+                    }
+
+                    for (size_t i = 0; i < lc; i++) free(lines[i]);
+                    free(lines);
+                }
+            }
+
+            printf("\n总数: %d\n", found);
+            if (!has_any_report) {
+                color_yellow();
+                printf("暂无审计报告\n");
+                color_reset();
+            } else if (found == 0) {
+                color_yellow();
+                printf("暂无疑似无L7数据\n");
+                color_reset();
+            }
             break;
-        case 18:
+        }
+        case 18: {
             color_yellow();
-            printf("\n>>> [18] 一键清理 (未实现/TODO)\n");
+            printf("\n>>> [18] 一键清理将停止审计并删除运行文件\n");
+            printf("仅保留 IP/Tokens 等用户配置\n");
             color_reset();
+            printf("确认执行? (y/N): ");
+            fflush(stdout);
+
+            char yn[8] = {0};
+            if (fgets(yn, sizeof(yn), stdin) && (yn[0] == 'y' || yn[0] == 'Y')) {
+                g_reload = 1;
+                int removed = saia_cleanup_runtime_files(g_config.base_dir);
+                color_green();
+                printf(">>> 清理完成: 删除运行文件 %d 个\n", removed);
+                color_reset();
+            } else {
+                color_dim();
+                printf("已取消\n");
+                color_reset();
+            }
             break;
-        case 19:
+        }
+        case 19: {
             color_yellow();
-            printf("\n>>> [19] 初始化 (未实现/TODO)\n");
+            printf("\n>>> [19] 初始化环境 (对齐 DEJI.py 逻辑)\n");
+            printf("会停止审计并清理运行痕迹；默认保留 IP/Tokens 配置\n");
             color_reset();
+
+            char input_keep_profile[8] = {0};
+            char input_keep_ports[8] = {0};
+            char confirm[8] = {0};
+
+            printf("是否保留用户配置(IP/Tokens/通知配置)? (y/n, 默认y): ");
+            fflush(stdout);
+            fgets(input_keep_profile, sizeof(input_keep_profile), stdin);
+            int keep_profile = !(input_keep_profile[0] == 'n' || input_keep_profile[0] == 'N');
+
+            printf("是否保留端口配置? (y/n, 默认y): ");
+            fflush(stdout);
+            fgets(input_keep_ports, sizeof(input_keep_ports), stdin);
+            int keep_ports = !(input_keep_ports[0] == 'n' || input_keep_ports[0] == 'N');
+
+            printf("确认执行初始化? (y/N): ");
+            fflush(stdout);
+            fgets(confirm, sizeof(confirm), stdin);
+
+            if (confirm[0] == 'y' || confirm[0] == 'Y') {
+                g_reload = 1;
+                int removed_runtime = saia_cleanup_runtime_files(g_config.base_dir);
+                int removed_profile = 0;
+                if (!keep_profile) {
+                    removed_profile = saia_cleanup_profile_files(g_config.base_dir);
+                }
+
+                color_green();
+                printf(">>> 初始化完成: 清理运行文件 %d 个, 清理配置 %d 个, 保留端口:%s\n",
+                       removed_runtime, removed_profile, keep_ports ? "ON" : "OFF");
+                color_reset();
+            } else {
+                color_dim();
+                printf("已取消\n");
+                color_reset();
+            }
             break;
+        }
         case 20:
             color_yellow();
             printf("\n>>> [20] 项目备注 (未实现/TODO)\n");

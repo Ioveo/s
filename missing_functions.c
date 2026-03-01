@@ -798,23 +798,37 @@ int saia_realtime_monitor(void) {
         for (int i = 0; i < inner; i++) printf("─");
         printf("┫" C_RESET "\n");
 
-        /* 统计行 */
+        /* 统计行: 实时显示 XUI/S5 的发现与验真 */
+        uint64_t xui_found = g_state.xui_found;
+        uint64_t xui_verified = g_state.xui_verified;
+        uint64_t s5_found = g_state.s5_found;
+        uint64_t s5_verified = g_state.s5_verified;
+
         snprintf(line3, sizeof(line3),
-                 " %s已扫描:%s %-10llu %s|%s %s已发现:%s %-10llu %s|%s %s已验证:%s %-10llu",
+                 " %s总扫描:%s %-9llu %s|%s %s总发现:%s %-9llu %s|%s %s总验真:%s %-9llu",
                  C_WHITE, C_GREEN, (unsigned long long)g_state.total_scanned,
                  bdr, C_RESET, C_WHITE, C_YELLOW, (unsigned long long)g_state.total_found,
                  bdr, C_RESET, C_WHITE, C_HOT, (unsigned long long)g_state.total_verified);
         printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line3, inner - 1, "", bdr);
 
+        snprintf(line4, sizeof(line4),
+                 " %sXUI发现:%s %-8llu %s|%s %sXUI验真:%s %-8llu %s|%s %sS5发现:%s %-8llu %s|%s %sS5验真:%s %-8llu",
+                 C_WHITE, C_YELLOW, (unsigned long long)xui_found,
+                 bdr, C_RESET, C_WHITE, C_HOT, (unsigned long long)xui_verified,
+                 bdr, C_RESET, C_WHITE, C_YELLOW, (unsigned long long)s5_found,
+                 bdr, C_RESET, C_WHITE, C_HOT, (unsigned long long)s5_verified);
+        printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line4, inner - 1, "", bdr);
+
         /* 压背控制 */
         if (g_config.backpressure.enabled) {
-            snprintf(line4, sizeof(line4),
+            char line5[256];
+            snprintf(line5, sizeof(line5),
                      " %sCPU:%s %.1f%% %s|%s %s内存:%s %.0fMB %s|%s %s连接:%s %d/%d %s|%s %s限流:%s %s",
                      C_WHITE, C_CYAN, g_config.backpressure.current_cpu,
                      bdr, C_RESET, C_WHITE, C_CYAN, g_config.backpressure.current_mem,
                      bdr, C_RESET, C_WHITE, C_CYAN, g_config.backpressure.current_connections, g_config.backpressure.max_connections,
                      bdr, C_RESET, C_WHITE, g_config.backpressure.is_throttled ? C_RED "是" : C_GREEN "否");
-            printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line4, inner - 1, "", bdr);
+            printf("%s┃%s%-*s%s┃" C_RESET "\n", bdr, line5, inner - 1, "", bdr);
         }
 
         /* 下边框 */

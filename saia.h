@@ -257,6 +257,10 @@ typedef struct {
     uint64_t total_scanned;
     uint64_t total_found;
     uint64_t total_verified;
+    uint64_t xui_found;
+    uint64_t xui_verified;
+    uint64_t s5_found;
+    uint64_t s5_verified;
     char status[32];
 } state_t;
 
