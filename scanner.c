@@ -13,6 +13,7 @@ typedef struct verify_task_s {
     size_t cred_count;
     int work_mode;
     int xui_fingerprint_ok;
+    int s5_fingerprint_ok;
     struct verify_task_s *next;
 } verify_task_t;
 
@@ -239,6 +240,7 @@ typedef struct {
     size_t cred_count;
     int work_mode;
     int xui_fingerprint_ok;
+    int s5_fingerprint_ok;
 } worker_arg_t;
 
 static void scanner_report_found_open(const worker_arg_t *task) {
@@ -248,7 +250,13 @@ static void scanner_report_found_open(const worker_arg_t *task) {
     const char *detail = "端口开放";
 
     if (task->work_mode == MODE_S5) {
-        tag = "[S5_FOUND]";
+        if (task->s5_fingerprint_ok > 0) {
+            tag = "[S5_FOUND]";
+            detail = "端口开放 + S5特征命中";
+        } else {
+            tag = "[PORT_OPEN]";
+            detail = "端口开放(无S5特征)";
+        }
     } else if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) {
         if (task->xui_fingerprint_ok > 0) {
             tag = "[XUI_FOUND]";
@@ -360,16 +368,52 @@ static int xui_has_required_fingerprint(const char *ip, uint16_t port, int timeo
     return 1;
 }
 
+static int s5_has_required_fingerprint(const char *ip, uint16_t port, int timeout_ms) {
+    int fd = socket_create(0);
+    if (fd < 0) return 0;
+
+    struct sockaddr_in addr;
+    memset(&addr, 0, sizeof(addr));
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    inet_pton(AF_INET, ip, &addr.sin_addr);
+
+    if (socket_connect_timeout(fd, (struct sockaddr*)&addr, sizeof(addr), timeout_ms) != 0) {
+        socket_close(fd);
+        return 0;
+    }
+
+    /* 提供 no-auth + user/pass 两种方法，识别标准 SOCKS5 协商回应 */
+    char hello[] = {0x05, 0x02, 0x00, 0x02};
+    if (socket_send_all(fd, hello, sizeof(hello), timeout_ms) < 0) {
+        socket_close(fd);
+        return 0;
+    }
+
+    char resp[2];
+    int n = socket_recv_until(fd, resp, sizeof(resp), NULL, timeout_ms);
+    socket_close(fd);
+    if (n != 2) return 0;
+
+    if ((unsigned char)resp[0] != 0x05) return 0;
+    if ((unsigned char)resp[1] == 0x00 || (unsigned char)resp[1] == 0x02) return 1;
+    return 0;
+}
+
 static void scanner_run_verify_logic(const verify_task_t *task) {
     if (!task) return;
 
     int xui_fingerprint_ok = task->xui_fingerprint_ok;
+    int s5_fingerprint_ok = task->s5_fingerprint_ok;
     if (xui_fingerprint_ok < 0 &&
         (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY)) {
         xui_fingerprint_ok = xui_has_required_fingerprint(task->ip, task->port, 3000);
     }
 
     if (task->work_mode == MODE_S5) {
+        if (s5_fingerprint_ok == 0) {
+            return;
+        }
         for (size_t i = 0; i < task->cred_count; i++) {
             scanner_set_progress_token(task->ip, task->port, task->creds[i].username, task->creds[i].password);
             if (verify_socks5(task->ip, task->port, task->creds[i].username, task->creds[i].password, 3000)) {
@@ -510,6 +554,7 @@ static void scanner_enqueue_verify_task(const worker_arg_t *task) {
     vt->cred_count = task->cred_count;
     vt->work_mode = task->work_mode;
     vt->xui_fingerprint_ok = task->xui_fingerprint_ok;
+    vt->s5_fingerprint_ok = task->s5_fingerprint_ok;
 
     MUTEX_LOCK(lock_stats);
     vt->next = NULL;
@@ -645,11 +690,15 @@ void *worker_thread(void *arg) {
     if (task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY) {
         task->xui_fingerprint_ok = xui_has_required_fingerprint(task->ip, task->port, 2000);
     }
+    task->s5_fingerprint_ok = -1;
+    if (task->work_mode == MODE_S5 || task->work_mode == MODE_DEEP || task->work_mode == MODE_VERIFY) {
+        task->s5_fingerprint_ok = s5_has_required_fingerprint(task->ip, task->port, 2000);
+    }
     
     // 端口开放，记录发现
     MUTEX_LOCK(lock_stats);
     g_state.total_found++;
-    if (task->work_mode == MODE_S5) {
+    if (task->work_mode == MODE_S5 && task->s5_fingerprint_ok > 0) {
         g_state.s5_found++;
     } else if ((task->work_mode == MODE_XUI || task->work_mode == MODE_DEEP) && task->xui_fingerprint_ok > 0) {
         g_state.xui_found++;
@@ -662,6 +711,9 @@ void *worker_thread(void *arg) {
     scanner_report_found_open(task);
 
     if (do_verify) {
+        if (task->work_mode == MODE_S5 && task->s5_fingerprint_ok <= 0) {
+            scanner_set_progress_token(task->ip, task->port, "-", "-");
+        } else
         if (task->work_mode == MODE_XUI && task->xui_fingerprint_ok <= 0) {
             scanner_set_progress_token(task->ip, task->port, "-", "-");
         } else {
@@ -903,6 +955,7 @@ static int feed_single_target(const char *ip, void *userdata) {
         arg->cred_count = ctx->cred_count;
         arg->work_mode = g_config.mode;
         arg->xui_fingerprint_ok = -1;
+        arg->s5_fingerprint_ok = -1;
 
         MUTEX_LOCK(lock_stats);
         running_threads++;
@@ -1114,6 +1167,7 @@ void scanner_start_multithreaded(char **nodes, size_t node_count, credential_t *
             arg->cred_count = cred_count;
             arg->work_mode = g_config.mode;
             arg->xui_fingerprint_ok = -1;
+            arg->s5_fingerprint_ok = -1;
             
             MUTEX_LOCK(lock_stats);
             running_threads++;
