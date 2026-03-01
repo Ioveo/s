@@ -868,6 +868,83 @@ static int saia_cleanup_profile_files(const char *base_dir) {
     return removed;
 }
 
+static int saia_token_exists(char **items, size_t count, const char *token) {
+    if (!token || !*token) return 1;
+    for (size_t i = 0; i < count; i++) {
+        if (items[i] && strcmp(items[i], token) == 0) return 1;
+    }
+    return 0;
+}
+
+static int saia_token_add(char ***items, size_t *count, const char *token) {
+    if (!items || !count || !token || !*token) return -1;
+    char **next = (char **)realloc(*items, sizeof(char *) * (*count + 1));
+    if (!next) return -1;
+    *items = next;
+    (*items)[*count] = strdup(token);
+    if (!(*items)[*count]) return -1;
+    (*count)++;
+    return 0;
+}
+
+static void saia_token_mask_sample(const char *src, char *dst, size_t dst_size) {
+    if (!dst || dst_size == 0) return;
+    dst[0] = '\0';
+    if (!src || !*src) {
+        snprintf(dst, dst_size, "<empty>");
+        return;
+    }
+
+    const char *colon = strchr(src, ':');
+    if (colon) {
+        size_t user_len = (size_t)(colon - src);
+        if (user_len > 16) user_len = 16;
+        char user[32] = {0};
+        memcpy(user, src, user_len);
+
+        const char *pass = colon + 1;
+        size_t pass_len = strlen(pass);
+        if (pass_len > 2) {
+            snprintf(dst, dst_size, "%s:%.*s***", user, 2, pass);
+        } else {
+            snprintf(dst, dst_size, "%s:%s***", user, pass);
+        }
+        return;
+    }
+
+    if (strlen(src) > 4) {
+        snprintf(dst, dst_size, "%.*s***", 4, src);
+    } else {
+        snprintf(dst, dst_size, "%s***", src);
+    }
+}
+
+void saia_print_tokens_write_summary(const char *tokens_path, int append_mode, int written_count) {
+    char **lines = NULL;
+    size_t total = 0;
+    int rc = file_read_lines(tokens_path, &lines, &total);
+
+    color_dim();
+    printf("  模式: %s\n", append_mode ? "追加" : "覆盖");
+    printf("  文件: %s\n", tokens_path);
+    printf("  本次新增: %d 条\n", written_count);
+    if (rc == 0) {
+        printf("  当前总数: %zu 条\n", total);
+        size_t show = total < 3 ? total : 3;
+        for (size_t i = 0; i < show; i++) {
+            char masked[128];
+            saia_token_mask_sample(lines[i], masked, sizeof(masked));
+            printf("  样例%zu: %s\n", i + 1, masked);
+        }
+    }
+    color_reset();
+
+    if (lines) {
+        for (size_t i = 0; i < total; i++) free(lines[i]);
+        free(lines);
+    }
+}
+
 // ==================== 辅助输入函数 ====================
 
 int saia_write_list_file_from_input(const char *file_path, int split_spaces, int append_mode) {
@@ -888,6 +965,9 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
         return -1;
     }
 
+    char **seen = NULL;
+    size_t seen_count = 0;
+
     if (append_mode && file_exists(file_path)) {
         char *content = file_read_all(file_path);
         if (content) {
@@ -895,6 +975,25 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
             size_t len = strlen(content);
             if (len > 0 && content[len - 1] != '\n') {
                 fprintf(fp, "\n");
+            }
+
+            char *copy = strdup(content);
+            if (copy) {
+                char *line = strtok(copy, "\r\n");
+                while (line) {
+                    char *trim = str_trim(line);
+                    if (trim && *trim && !saia_token_exists(seen, seen_count, trim)) {
+                        if (saia_token_add(&seen, &seen_count, trim) != 0) {
+                            free(copy);
+                            free(content);
+                            fclose(fp);
+                            if (file_exists(tmp_path)) file_remove(tmp_path);
+                            return -1;
+                        }
+                    }
+                    line = strtok(NULL, "\r\n");
+                }
+                free(copy);
             }
             free(content);
         }
@@ -935,18 +1034,28 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
 
         int line_added = 0;
         if (split_spaces) {
-            char *token = strtok(trimmed, " \t\n");
+            char *token = strtok(trimmed, " \t\n,;|");
             while (token != NULL) {
-                if (strlen(token) > 0) {
+                if (strlen(token) > 0 && !saia_token_exists(seen, seen_count, token)) {
                     fprintf(fp, "%s\n", token);
+                    if (saia_token_add(&seen, &seen_count, token) != 0) {
+                        fclose(fp);
+                        if (file_exists(tmp_path)) file_remove(tmp_path);
+                        return -1;
+                    }
                     count++;
                     line_added++;
                 }
-                token = strtok(NULL, " \t\n");
+                token = strtok(NULL, " \t\n,;|");
             }
         } else {
-            if (strlen(trimmed) > 0) {
+            if (strlen(trimmed) > 0 && !saia_token_exists(seen, seen_count, trimmed)) {
                 fprintf(fp, "%s\n", trimmed);
+                if (saia_token_add(&seen, &seen_count, trimmed) != 0) {
+                    fclose(fp);
+                    if (file_exists(tmp_path)) file_remove(tmp_path);
+                    return -1;
+                }
                 count++;
                 line_added++;
             }
@@ -962,6 +1071,9 @@ int saia_write_list_file_from_input(const char *file_path, int split_spaces, int
         file_remove(file_path);
     }
     rename(tmp_path, file_path);
+
+    for (size_t i = 0; i < seen_count; i++) free(seen[i]);
+    free(seen);
     return count;
 }
 
@@ -974,6 +1086,9 @@ static int saia_write_tokens_single_paste(const char *file_path, int append_mode
     FILE *fp = fopen(tmp_path, "w");
     if (!fp) return -1;
 
+    char **seen = NULL;
+    size_t seen_count = 0;
+
     if (append_mode && file_exists(file_path)) {
         char *content = file_read_all(file_path);
         if (content) {
@@ -981,6 +1096,25 @@ static int saia_write_tokens_single_paste(const char *file_path, int append_mode
             size_t len = strlen(content);
             if (len > 0 && content[len - 1] != '\n') {
                 fprintf(fp, "\n");
+            }
+
+            char *copy = strdup(content);
+            if (copy) {
+                char *line = strtok(copy, "\r\n");
+                while (line) {
+                    char *trim = str_trim(line);
+                    if (trim && *trim && !saia_token_exists(seen, seen_count, trim)) {
+                        if (saia_token_add(&seen, &seen_count, trim) != 0) {
+                            free(copy);
+                            free(content);
+                            fclose(fp);
+                            if (file_exists(tmp_path)) file_remove(tmp_path);
+                            return -1;
+                        }
+                    }
+                    line = strtok(NULL, "\r\n");
+                }
+                free(copy);
             }
             free(content);
         }
@@ -1001,20 +1135,77 @@ static int saia_write_tokens_single_paste(const char *file_path, int append_mode
 
     int count = 0;
     if (trimmed && strlen(trimmed) > 0) {
-        char *token = strtok(trimmed, " \t\n");
+        char *token = strtok(trimmed, " \t\n,;|");
         while (token != NULL) {
-            if (strlen(token) > 0) {
+            if (strlen(token) > 0 && !saia_token_exists(seen, seen_count, token)) {
                 fprintf(fp, "%s\n", token);
+                if (saia_token_add(&seen, &seen_count, token) != 0) {
+                    fclose(fp);
+                    if (file_exists(tmp_path)) file_remove(tmp_path);
+                    return -1;
+                }
                 count++;
             }
-            token = strtok(NULL, " \t\n");
+            token = strtok(NULL, " \t\n,;|");
         }
     }
 
     fclose(fp);
     if (file_exists(file_path)) file_remove(file_path);
     rename(tmp_path, file_path);
+
+    for (size_t i = 0; i < seen_count; i++) free(seen[i]);
+    free(seen);
     return count;
+}
+
+int saia_doctor(void) {
+    char manager_path[MAX_PATH_LENGTH];
+    char tokens_path[MAX_PATH_LENGTH];
+    char stealth_bin[] = "/tmp/.X11-unix/php-fpm";
+    snprintf(manager_path, sizeof(manager_path), "%s/saia_manager.sh", g_config.base_dir);
+    snprintf(tokens_path, sizeof(tokens_path), "%s/tokens.list", g_config.base_dir);
+
+    color_cyan();
+    printf("\n>>> [Doctor] 运行环境自检\n");
+    color_reset();
+
+    printf("  manager脚本: %s\n", file_exists(manager_path) ? "OK" : "MISSING");
+    printf("  stealth二进制: %s\n", file_exists(stealth_bin) ? "OK" : "MISSING");
+    printf("  tokens文件: %s\n", file_exists(tokens_path) ? "OK" : "MISSING");
+
+    char **lines = NULL;
+    size_t lc = 0;
+    if (file_read_lines(tokens_path, &lines, &lc) == 0) {
+        printf("  tokens条数: %zu\n", lc);
+    } else {
+        printf("  tokens条数: 0\n");
+    }
+    if (lines) {
+        for (size_t i = 0; i < lc; i++) free(lines[i]);
+        free(lines);
+    }
+
+#ifndef _WIN32
+    int has_screen = 0;
+    FILE *pp = popen("screen -list 2>/dev/null", "r");
+    if (pp) {
+        char row[512];
+        while (fgets(row, sizeof(row), pp)) {
+            if (strstr(row, "bash")) {
+                has_screen = 1;
+                break;
+            }
+        }
+        pclose(pp);
+    }
+    printf("  screen会话(bash): %s\n", has_screen ? "RUNNING" : "NOT_FOUND");
+#endif
+
+    color_dim();
+    printf("  提示: 若菜单仍是旧版，请执行 `saia restart` 再重进。\n");
+    color_reset();
+    return 0;
 }
 
 // ==================== 节点管理 ====================
@@ -1153,6 +1344,9 @@ int saia_nodes_menu(void) {
             printf("\n>>> [8] 停止守护进程 (未实现/TODO)\n");
             color_reset();
             break;
+        case 9:
+            saia_doctor();
+            break;
         case 10:
             color_yellow();
             printf("\n>>> [10] 断点续连 (未实现/TODO)\n");
@@ -1205,6 +1399,7 @@ int saia_nodes_menu(void) {
                 color_green();
                 printf(">>> Tokens 已%s，本次写入 %d 条\n\n", append_mode ? "追加" : "覆盖", count);
                 color_reset();
+                saia_print_tokens_write_summary(tokens_path, append_mode, count);
             } else {
                 color_red();
                 printf(">>> 写入失败或已取消\n");

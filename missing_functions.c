@@ -307,9 +307,7 @@ int saia_interactive_mode(void) {
                 color_reset();
                 break;
             case 9:
-                color_yellow();
-                printf("\n>>> [9] 守护诊断 (未实现/TODO)\n");
-                color_reset();
+                saia_doctor();
                 break;
 
             /* ========== 配置与通知 ========== */
@@ -370,6 +368,7 @@ int saia_interactive_mode(void) {
                     color_green();
                     printf(">>> 口令已%s，本次写入 %d 条\n\n", append_mode ? "追加" : "覆盖", count);
                     color_reset();
+                    saia_print_tokens_write_summary(tokens_path, append_mode, count);
                 } else {
                     color_red();
                     printf(">>> 写入失败或已取消\n");

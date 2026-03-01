@@ -326,6 +326,8 @@ int saia_nodes_menu(void);
 int saia_interactive_mode(void);
 int saia_realtime_monitor(void);
 int saia_write_list_file_from_input(const char *file_path, int split_spaces, int append_mode);
+int saia_doctor(void);
+void saia_print_tokens_write_summary(const char *tokens_path, int append_mode, int written_count);
 // missing_functions.c
 int saia_backpressure_menu(void);
 int saia_cleanup_menu(void);

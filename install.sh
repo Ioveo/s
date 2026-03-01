@@ -182,6 +182,22 @@ case "\$CMD" in
     status)
         screen -list | grep -q "\$SCREEN_NAME" && echo "RUNNING (Ultimate Stealth: php-fpm)" || echo "STOPPED"
         ;;
+    doctor)
+        echo "[doctor] manager: $INSTALL_DIR/saia_manager.sh"
+        echo "[doctor] source: \$SOURCE_BIN"
+        echo "[doctor] stealth: \$STEALTH_BIN"
+        if [ -f "\$SOURCE_BIN" ]; then
+            echo "[doctor] source exists: yes"
+        else
+            echo "[doctor] source exists: no"
+        fi
+        if [ -f "\$STEALTH_BIN" ]; then
+            echo "[doctor] stealth exists: yes"
+        else
+            echo "[doctor] stealth exists: no"
+        fi
+        screen -list 2>/dev/null | grep "\$SCREEN_NAME" || echo "[doctor] screen session: not found"
+        ;;
     attach)
         screen -r "\$SCREEN_NAME"
         ;;
