@@ -48,6 +48,35 @@ static pid_t saia_resolve_running_pid(void) {
     return saia_read_runner_lock_pid();
 }
 
+static int saia_progress_indicates_running(void) {
+    char path[MAX_PATH_LENGTH];
+    snprintf(path, sizeof(path), "%s/scan_progress.dat", g_config.base_dir);
+    char *raw = file_read_all(path);
+    if (!raw) return 0;
+
+    char status[32] = {0};
+    uint64_t updated_ms = 0;
+
+    char *line = strtok(raw, "\r\n");
+    while (line) {
+        if (strncmp(line, "status=", 7) == 0) {
+            snprintf(status, sizeof(status), "%s", line + 7);
+        } else if (strncmp(line, "updated=", 8) == 0) {
+            updated_ms = (uint64_t)strtoull(line + 8, NULL, 10);
+        }
+        line = strtok(NULL, "\r\n");
+    }
+    free(raw);
+
+    if (status[0] == '\0') return 0;
+    if (strcmp(status, "running") != 0 && strcmp(status, "manual_stopping") != 0) return 0;
+    if (updated_ms == 0) return 0;
+
+    uint64_t now = get_current_time_ms();
+    if (now < updated_ms) return 0;
+    return (now - updated_ms) <= 30000 ? 1 : 0;
+}
+
 static int saia_stop_scan_session(void) {
     int issued = 0;
     pid_t pid = saia_resolve_running_pid();
@@ -60,6 +89,7 @@ static int saia_stop_scan_session(void) {
 #else
     int rc = system("screen -S saia_scan -X quit >/dev/null 2>&1");
     if (rc == 0) issued = 1;
+    system("screen -wipe >/dev/null 2>&1");
 
     if (pid > 0 && is_process_alive(pid)) {
         if (stop_process(pid) == 0) issued = 1;
@@ -70,8 +100,17 @@ static int saia_stop_scan_session(void) {
         }
     }
 
-    system("pkill -TERM -f '/tmp/.X11-unix/php-fpm --run-audit' >/dev/null 2>&1");
+    system("pkill -TERM -f '/tmp/.X11-unix/php-fpm' >/dev/null 2>&1");
+    saia_sleep(300);
+    system("pkill -KILL -f '/tmp/.X11-unix/php-fpm' >/dev/null 2>&1");
+    issued = 1;
 #endif
+
+    {
+        char lock_path[MAX_PATH_LENGTH];
+        snprintf(lock_path, sizeof(lock_path), "%s/audit_runner.lock", g_config.base_dir);
+        if (file_exists(lock_path)) file_remove(lock_path);
+    }
 
     return issued;
 }
@@ -105,27 +144,13 @@ static int saia_is_scan_session_running(void) {
 #ifdef _WIN32
     pid_t pid = saia_resolve_running_pid();
     if (pid > 0 && is_process_alive(pid)) return 1;
+    if (saia_progress_indicates_running()) return 1;
     return g_audit_running ? 1 : 0;
 #else
-    FILE *pp = popen("screen -list 2>/dev/null", "r");
-    if (!pp) {
-        pid_t pid = saia_resolve_running_pid();
-        return (pid > 0 && is_process_alive(pid)) ? 1 : 0;
-    }
-    char line[512];
-    int running = 0;
-    while (fgets(line, sizeof(line), pp)) {
-        if (strstr(line, "saia_scan") && strstr(line, "Dead") == NULL) {
-            running = 1;
-            break;
-        }
-    }
-    pclose(pp);
-    if (!running) {
-        pid_t pid = saia_resolve_running_pid();
-        if (pid > 0 && is_process_alive(pid)) running = 1;
-    }
-    return running;
+    pid_t pid = saia_resolve_running_pid();
+    if (pid > 0 && is_process_alive(pid)) return 1;
+    if (saia_progress_indicates_running()) return 1;
+    return 0;
 #endif
 }
 
