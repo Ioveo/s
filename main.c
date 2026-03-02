@@ -340,9 +340,9 @@ static void saia_print_dual_panel_line(const char *bdr, const char *left, const 
     int rpad = maxw - rw;
     if (lpad < 0) lpad = 0;
     if (rpad < 0) rpad = 0;
-    printf("%s┃ %s", bdr, left);
+    printf("%s┃ %s%s%s", bdr, C_WHITE, left, C_RESET);
     for (int i = 0; i < lpad; i++) putchar(' ');
-    printf(" ┃  %s┃ %s", bdr, right);
+    printf(" ┃  %s┃ %s%s%s", bdr, C_WHITE, right, C_RESET);
     for (int i = 0; i < rpad; i++) putchar(' ');
     printf(" ┃%s\n", C_RESET);
 }

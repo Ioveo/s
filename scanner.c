@@ -100,8 +100,8 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
         return 0;
     }
     
-    char resp[2];
-    if (socket_recv_until(fd, resp, 2, NULL, timeout_ms) != 2) {
+    char resp[16];
+    if (socket_recv_until(fd, resp, sizeof(resp), NULL, timeout_ms) < 2) {
         socket_close(fd);
         return 0;
     }
@@ -136,8 +136,8 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
             return 0;
         }
         
-        char auth_resp[2];
-        if (socket_recv_until(fd, auth_resp, 2, NULL, timeout_ms) != 2) {
+        char auth_resp[16];
+        if (socket_recv_until(fd, auth_resp, sizeof(auth_resp), NULL, timeout_ms) < 2) {
             socket_close(fd);
             return 0;
         }
@@ -163,8 +163,8 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
         return 0;
     }
     
-    char conn_resp[10];
-    if (socket_recv_until(fd, conn_resp, 10, NULL, timeout_ms) < 4) {
+    char conn_resp[32];
+    if (socket_recv_until(fd, conn_resp, sizeof(conn_resp), NULL, timeout_ms) < 4) {
         socket_close(fd);
         return 0;
     }

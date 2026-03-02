@@ -208,9 +208,17 @@ int socket_recv_until(int fd, char *buf, size_t size, const char *delimiter, int
         return -1;
     }
     
-    int received = recv(fd, buf, size - 1, 0);
+    size_t recv_cap = size;
+    if (delimiter) {
+        if (size <= 1) return -1;
+        recv_cap = size - 1;
+    }
+
+    int received = recv(fd, buf, recv_cap, 0);
     if (received <= 0) return -1;
-    
-    buf[received] = '\0';
+
+    if (delimiter) {
+        buf[received] = '\0';
+    }
     return received;
 }

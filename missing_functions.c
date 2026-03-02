@@ -1320,9 +1320,9 @@ int saia_realtime_monitor(void) {
             int rpad = maxw - rw;
             if (lpad < 0) lpad = 0;
             if (rpad < 0) rpad = 0;
-            printf("%s┃ %s", bdr, left[i]);
+            printf("%s┃ %s%s%s", bdr, C_WHITE, left[i], C_RESET);
             for (int j = 0; j < lpad; j++) putchar(' ');
-            printf(" ┃  %s┃ %s", bdr, right[i]);
+            printf(" ┃  %s┃ %s%s%s", bdr, C_WHITE, right[i], C_RESET);
             for (int j = 0; j < rpad; j++) putchar(' ');
             printf(" ┃%s\n", C_RESET);
             if (i == 0) {
