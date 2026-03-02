@@ -740,9 +740,14 @@ int saia_interactive_mode(void) {
                     break;
                 }
 
-                int port_batch_size = 5;
+                int port_batch_size = 30;
                 {
                     char input[256] = {0};
+
+                    /* 启动子菜单默认值 */
+                    g_config.mode = 3;
+                    g_config.scan_mode = 2;
+                    g_config.threads = 1000;
 
                     color_cyan();
                     printf("\n>>> 启动前配置 (留空使用当前值)\n");
@@ -782,7 +787,7 @@ int saia_interactive_mode(void) {
                         }
                     }
 
-                    printf("端口分批大小 [1-30] (默认5): ");
+                    printf("端口分批大小 [1-30] (默认30): ");
                     fflush(stdout);
                     if (fgets(input, sizeof(input), stdin) && strlen(input) > 1) {
                         int batch = atoi(input);

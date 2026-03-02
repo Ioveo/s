@@ -16,6 +16,44 @@ static int saia_resume_load(size_t *next_port_start, size_t *saved_port_count);
 static void saia_resume_save(size_t next_port_start, size_t port_count);
 static void saia_resume_clear(void);
 
+static pid_t saia_menu_read_pid_file(const char *path) {
+    if (!path || !*path) return 0;
+    char *raw = file_read_all(path);
+    if (!raw) return 0;
+    long v = strtol(raw, NULL, 10);
+    free(raw);
+    if (v <= 0) return 0;
+    return (pid_t)v;
+}
+
+static int saia_menu_progress_running_recent(void) {
+    char path[MAX_PATH_LENGTH];
+    snprintf(path, sizeof(path), "%s/scan_progress.dat", g_config.base_dir);
+    char *raw = file_read_all(path);
+    if (!raw) return 0;
+
+    char status[32] = {0};
+    uint64_t updated_ms = 0;
+
+    char *line = strtok(raw, "\r\n");
+    while (line) {
+        if (strncmp(line, "status=", 7) == 0) {
+            snprintf(status, sizeof(status), "%s", line + 7);
+        } else if (strncmp(line, "updated=", 8) == 0) {
+            updated_ms = (uint64_t)strtoull(line + 8, NULL, 10);
+        }
+        line = strtok(NULL, "\r\n");
+    }
+    free(raw);
+
+    if (status[0] == '\0') return 0;
+    if (strcmp(status, "running") != 0 && strcmp(status, "manual_stopping") != 0) return 0;
+    if (updated_ms == 0) return 0;
+    uint64_t now = get_current_time_ms();
+    if (now < updated_ms) return 0;
+    return (now - updated_ms) <= 30000 ? 1 : 0;
+}
+
 static void saia_write_runner_lock(pid_t pid) {
     char path[MAX_PATH_LENGTH];
     snprintf(path, sizeof(path), "%s/audit_runner.lock", g_config.base_dir);
@@ -210,22 +248,33 @@ void saia_print_stats(state_t *state) {
 // ==================== 交互式菜单 ====================
 
 static int saia_menu_is_scan_running(void) {
-#ifdef _WIN32
-    return 0;
-#else
-    FILE *pp = popen("screen -list 2>/dev/null", "r");
-    if (!pp) return 0;
-    char line[512];
-    int running = 0;
-    while (fgets(line, sizeof(line), pp)) {
-        if (strstr(line, "saia_scan")) {
-            running = 1;
-            break;
+    char progress_path[MAX_PATH_LENGTH];
+    snprintf(progress_path, sizeof(progress_path), "%s/scan_progress.dat", g_config.base_dir);
+    pid_t pid = 0;
+
+    char *raw = file_read_all(progress_path);
+    if (raw) {
+        char *line = strtok(raw, "\r\n");
+        while (line) {
+            if (strncmp(line, "pid=", 4) == 0) {
+                long v = strtol(line + 4, NULL, 10);
+                if (v > 0) pid = (pid_t)v;
+                break;
+            }
+            line = strtok(NULL, "\r\n");
         }
+        free(raw);
     }
-    pclose(pp);
-    return running;
-#endif
+
+    if (pid <= 0) {
+        char lock_path[MAX_PATH_LENGTH];
+        snprintf(lock_path, sizeof(lock_path), "%s/audit_runner.lock", g_config.base_dir);
+        pid = saia_menu_read_pid_file(lock_path);
+    }
+
+    if (pid > 0 && is_process_alive(pid)) return 1;
+    if (saia_menu_progress_running_recent()) return 1;
+    return 0;
 }
 
 static const char *saia_menu_spinner(int running) {
@@ -757,7 +806,7 @@ int saia_print_menu(void) {
     /* 运行区三列菜单 */
     printf("%s┃ %s %-20s  %s %-20s  %s %-20s %s┃" C_RESET "\n",
            bdr,
-           C_HOT,  " 1. 开始审计扫描",
+           scan_running ? C_HOT : C_WHITE,  " 1. 开始审计扫描",
            C_WHITE, " 2. 手动停止审计",
            C_WHITE, " 3. 实时监控",
            bdr);
@@ -786,7 +835,7 @@ int saia_print_menu(void) {
            bdr,
            C_WHITE, "10. 断点续连",
            C_WHITE, "11. 压背控制",
-           C_HOT,   "12. TG推送配置",
+           g_config.telegram_enabled ? C_HOT : C_WHITE,   "12. TG推送配置",
            bdr);
 
     /* 分隔行 */
