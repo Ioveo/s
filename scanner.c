@@ -100,8 +100,8 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
         return 0;
     }
     
-    char resp[16];
-    if (socket_recv_until(fd, resp, sizeof(resp), NULL, timeout_ms) < 2) {
+    char resp[2];
+    if (socket_recv_exact(fd, resp, 2, timeout_ms) != 2) {
         socket_close(fd);
         return 0;
     }
@@ -136,8 +136,8 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
             return 0;
         }
         
-        char auth_resp[16];
-        if (socket_recv_until(fd, auth_resp, sizeof(auth_resp), NULL, timeout_ms) < 2) {
+        char auth_resp[2];
+        if (socket_recv_exact(fd, auth_resp, 2, timeout_ms) != 2) {
             socket_close(fd);
             return 0;
         }
@@ -163,15 +163,48 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
         return 0;
     }
     
-    char conn_resp[32];
-    if (socket_recv_until(fd, conn_resp, sizeof(conn_resp), NULL, timeout_ms) < 4) {
+    char conn_head[4];
+    if (socket_recv_exact(fd, conn_head, 4, timeout_ms) != 4) {
         socket_close(fd);
         return 0;
     }
     
-    if (conn_resp[1] != 0x00) {
+    if (conn_head[1] != 0x00) {
         socket_close(fd);
         return 0; // 连接被代理拒绝
+    }
+
+    int atyp = (unsigned char)conn_head[3];
+    size_t addr_len = 0;
+    if (atyp == 0x01) {
+        addr_len = 4;
+    } else if (atyp == 0x04) {
+        addr_len = 16;
+    } else if (atyp == 0x03) {
+        unsigned char dlen = 0;
+        if (socket_recv_exact(fd, (char *)&dlen, 1, timeout_ms) != 1) {
+            socket_close(fd);
+            return 0;
+        }
+        addr_len = (size_t)dlen;
+    } else {
+        socket_close(fd);
+        return 0;
+    }
+
+    if (addr_len > 0) {
+        char addr_buf[256];
+        if (addr_len > sizeof(addr_buf) ||
+            socket_recv_exact(fd, addr_buf, addr_len, timeout_ms) != (int)addr_len) {
+            socket_close(fd);
+            return 0;
+        }
+    }
+
+    char bnd_port[2];
+    if (socket_recv_exact(fd, bnd_port, 2, timeout_ms) != 2) {
+        socket_close(fd);
+        return 0;
     }
     
     // 4. 发起 L7 HTTP GET 请求，确认是否真实代理成功
@@ -223,6 +256,40 @@ static int contains_ci(const char *haystack, const char *needle) {
     return 0;
 }
 
+/* 精确收包：直到读满 exact_size 或超时/断开 */
+static int socket_recv_exact(int fd, char *buf, size_t exact_size, int timeout_ms) {
+    if (fd < 0 || !buf || exact_size == 0) return -1;
+
+    uint64_t start_ms = get_current_time_ms();
+    size_t total = 0;
+    while (total < exact_size) {
+        uint64_t now_ms = get_current_time_ms();
+        int remain_ms = timeout_ms;
+        if (now_ms > start_ms) {
+            uint64_t elapsed = now_ms - start_ms;
+            if (elapsed >= (uint64_t)timeout_ms) break;
+            remain_ms = timeout_ms - (int)elapsed;
+        }
+
+        fd_set read_fds;
+        FD_ZERO(&read_fds);
+        FD_SET(fd, &read_fds);
+
+        struct timeval tv;
+        tv.tv_sec = remain_ms / 1000;
+        tv.tv_usec = (remain_ms % 1000) * 1000;
+
+        int ready = select(fd + 1, &read_fds, NULL, NULL, &tv);
+        if (ready <= 0) break;
+
+        int n = recv(fd, buf + total, exact_size - total, 0);
+        if (n <= 0) break;
+        total += (size_t)n;
+    }
+
+    return (int)total;
+}
+
 static void xui_build_url(char *out, size_t out_sz, const char *ip, uint16_t port, const char *path, int use_ssl) {
     snprintf(out, out_sz, "%s://%s:%d%s", use_ssl ? "https" : "http", ip, (int)port, path && *path ? path : "/");
 }
@@ -248,6 +315,16 @@ static int xui_extract_location_path(const char *headers, char *out, size_t out_
                 p[8] == ':') {
                 const char *v = p + 9;
                 while (*v == ' ' || *v == '\t') v++;
+                if (strncmp(v, "http://", 7) == 0) {
+                    v += 7;
+                    while (*v && *v != '/' && *v != '\r' && *v != '\n') v++;
+                } else if (strncmp(v, "https://", 8) == 0) {
+                    v += 8;
+                    while (*v && *v != '/' && *v != '\r' && *v != '\n') v++;
+                } else if (strncmp(v, "//", 2) == 0) {
+                    v += 2;
+                    while (*v && *v != '/' && *v != '\r' && *v != '\n') v++;
+                }
                 if (*v == '/') {
                     size_t i = 0;
                     while (i + 1 < out_sz && v[i] && v + i < p + len && v[i] != '\r' && v[i] != '\n') {
@@ -652,7 +729,7 @@ static int s5_has_required_fingerprint(const char *ip, uint16_t port, int timeou
         }
 
         char resp[2];
-        int n = socket_recv_until(fd, resp, sizeof(resp), NULL, timeout_ms);
+        int n = socket_recv_exact(fd, resp, 2, timeout_ms);
         socket_close(fd);
         if (n != 2) continue;
 
