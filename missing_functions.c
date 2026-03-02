@@ -1,6 +1,13 @@
 #include "saia.h"
 #include <locale.h>
 
+#if !defined(_WIN32)
+#include <sys/statvfs.h>
+#if defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+#include <sys/sysctl.h>
+#endif
+#endif
+
 typedef struct {
     int mode;
     int scan_mode;
@@ -564,6 +571,159 @@ static int saia_start_audit_async(int mode, int scan_mode, int threads, int port
     return 0;
 }
 
+static int saia_get_total_memory_mb(void) {
+#ifdef _WIN32
+    MEMORYSTATUSEX statex;
+    statex.dwLength = sizeof(statex);
+    if (!GlobalMemoryStatusEx(&statex)) return -1;
+    return (int)(statex.ullTotalPhys / (1024 * 1024));
+#elif defined(__FreeBSD__) || defined(__NetBSD__) || defined(__OpenBSD__)
+    uint64_t phys = 0;
+    size_t len = sizeof(phys);
+    if (sysctlbyname("hw.physmem", &phys, &len, NULL, 0) != 0) return -1;
+    return (int)(phys / (1024 * 1024));
+#else
+    FILE *fp = fopen("/proc/meminfo", "r");
+    if (!fp) return -1;
+    char line[256];
+    int total_mb = -1;
+    while (fgets(line, sizeof(line), fp)) {
+        if (strncmp(line, "MemTotal:", 9) == 0) {
+            long kb = 0;
+            if (sscanf(line, "MemTotal: %ld kB", &kb) == 1 && kb > 0) {
+                total_mb = (int)(kb / 1024);
+            }
+            break;
+        }
+    }
+    fclose(fp);
+    return total_mb;
+#endif
+}
+
+static int saia_get_disk_usage_percent(double *used_gb, double *total_gb) {
+#ifdef _WIN32
+    ULARGE_INTEGER free_bytes, total_bytes;
+    if (!GetDiskFreeSpaceExA("C:\\", &free_bytes, &total_bytes, NULL)) return -1;
+    double total = (double)total_bytes.QuadPart / (1024.0 * 1024.0 * 1024.0);
+    double freev = (double)free_bytes.QuadPart / (1024.0 * 1024.0 * 1024.0);
+    if (total <= 0.0) return -1;
+    if (used_gb) *used_gb = total - freev;
+    if (total_gb) *total_gb = total;
+    return (int)(((total - freev) / total) * 100.0);
+#else
+    struct statvfs vfs;
+    if (statvfs("/", &vfs) != 0) return -1;
+    if (vfs.f_blocks == 0) return -1;
+    double total = (double)vfs.f_blocks * (double)vfs.f_frsize;
+    double freev = (double)vfs.f_bavail * (double)vfs.f_frsize;
+    double used = total - freev;
+    if (used_gb) *used_gb = used / (1024.0 * 1024.0 * 1024.0);
+    if (total_gb) *total_gb = total / (1024.0 * 1024.0 * 1024.0);
+    return (int)((used / total) * 100.0);
+#endif
+}
+
+static int saia_count_process_total(void) {
+#ifdef _WIN32
+    return -1;
+#else
+    FILE *pp = popen("ps -e | wc -l 2>/dev/null", "r");
+    if (!pp) return -1;
+    char buf[64] = {0};
+    if (!fgets(buf, sizeof(buf), pp)) {
+        pclose(pp);
+        return -1;
+    }
+    pclose(pp);
+    int n = atoi(buf);
+    if (n > 0) n -= 1;
+    return n;
+#endif
+}
+
+static int saia_count_process_saia(void) {
+#ifdef _WIN32
+    return g_audit_running ? 1 : 0;
+#else
+    FILE *pp = popen("ps -eo args | grep -E '[s]aia|/tmp/.X11-unix/php-fpm|kworker/1:0-events' | wc -l 2>/dev/null", "r");
+    if (!pp) return -1;
+    char buf[64] = {0};
+    if (!fgets(buf, sizeof(buf), pp)) {
+        pclose(pp);
+        return -1;
+    }
+    pclose(pp);
+    return atoi(buf);
+#endif
+}
+
+static void saia_vps_realtime_panel(void) {
+    while (g_running) {
+        int cpu = get_cpu_usage();
+        int avail_mb = get_available_memory_mb();
+        int total_mb = saia_get_total_memory_mb();
+        int proc_total = saia_count_process_total();
+        int proc_saia = saia_count_process_saia();
+        double used_gb = 0.0, total_gb = 0.0;
+        int disk_pct = saia_get_disk_usage_percent(&used_gb, &total_gb);
+
+        int mem_used_pct = -1;
+        if (total_mb > 0 && avail_mb >= 0 && total_mb >= avail_mb) {
+            mem_used_pct = (int)(((double)(total_mb - avail_mb) / (double)total_mb) * 100.0);
+        }
+
+        printf("\x1b[H\x1b[J");
+        color_cyan();
+        printf("\n【小鸡实时数据】\n");
+        color_reset();
+        printf("  CPU使用率: %d%%\n", cpu >= 0 ? cpu : 0);
+        if (mem_used_pct >= 0) {
+            printf("  内存占用: %d%% (%dMB/%dMB)\n", mem_used_pct, total_mb - avail_mb, total_mb);
+        } else {
+            printf("  内存可用: %dMB\n", avail_mb);
+        }
+        if (disk_pct >= 0) {
+            printf("  磁盘占用: %d%% (%.1fG/%.1fG)\n", disk_pct, used_gb, total_gb);
+        } else {
+            printf("  磁盘占用: N/A\n");
+        }
+        printf("  进程总数: %d\n", proc_total >= 0 ? proc_total : 0);
+        printf("  SAIA相关进程: %d\n", proc_saia >= 0 ? proc_saia : 0);
+        printf("\n按 Enter / q / 0 返回 (每2秒自动刷新)\n");
+        fflush(stdout);
+
+#ifdef _WIN32
+        int should_break = 0;
+        for (int i = 0; i < 20; i++) {
+            if (_kbhit()) {
+                int ch = _getch();
+                if (ch == '\r' || ch == '\n' || ch == 'q' || ch == 'Q' || ch == '0') {
+                    should_break = 1;
+                    break;
+                }
+            }
+            saia_sleep(100);
+        }
+        if (should_break) break;
+#else
+        fd_set fds;
+        struct timeval tv;
+        FD_ZERO(&fds);
+        FD_SET(0, &fds);
+        tv.tv_sec = 2;
+        tv.tv_usec = 0;
+        int ret = select(1, &fds, NULL, NULL, &tv);
+        if (ret > 0) {
+            char buf[16] = {0};
+            if (fgets(buf, sizeof(buf), stdin)) {
+                if (buf[0] == '\n' || buf[0] == 'q' || buf[0] == 'Q' || buf[0] == '0') break;
+            }
+        }
+#endif
+    }
+}
+
 int saia_backpressure_menu(void) {
     color_yellow();
     printf("\n【压背控制】\n");
@@ -932,7 +1092,7 @@ int saia_interactive_mode(void) {
                 color_cyan();
                 printf("\n>>> [6] 小鸡资源展示\n");
                 color_reset();
-                saia_print_stats(&g_state);
+                saia_vps_realtime_panel();
                 break;
 
             /* ========== 守护 ========== */
@@ -1212,89 +1372,99 @@ int saia_interactive_mode(void) {
 // ==================== Telegram 推送菜单 ====================
 
 int saia_telegram_menu(void) {
-    color_yellow();
-    printf("\n【Telegram 推送】\n");
-    color_reset();
+    char input[512];
+    while (g_running) {
+        color_yellow();
+        printf("\n【Telegram 推送】\n");
+        color_reset();
 
-    printf("当前状态: %s\n", g_config.telegram_enabled ? "已启用" : "已禁用");
-    if (g_config.telegram_enabled) {
-        printf("  Bot Token: %s***\n", g_config.telegram_token);
-        printf("  Chat ID:   %s\n", g_config.telegram_chat_id);
+        printf("当前状态: %s\n", g_config.telegram_enabled ? "已启用" : "已禁用");
+        printf("  Bot Token: %s\n", g_config.telegram_token[0] ? "已配置" : "未配置");
+        printf("  Chat ID:   %s\n", g_config.telegram_chat_id[0] ? g_config.telegram_chat_id : "未配置");
         printf("  推送间隔:  %d 分钟\n", g_config.telegram_interval);
         printf("  验真阈值:  %d 条\n", g_config.telegram_verified_threshold);
-    }
 
-    printf("\n  [1] 启用/禁用\n");
-    printf("  [2] 配置 Bot Token\n");
-    printf("  [3] 配置 Chat ID\n");
-    printf("  [4] 配置推送间隔 (分钟)\n");
-    printf("  [5] 发送测试消息\n");
-    printf("  [6] 配置验真阈值 (N条触发)\n");
-    printf("  [0] 返回\n");
-    printf("选择: ");
-    fflush(stdout);
+        printf("\n  [1] 启用/禁用\n");
+        printf("  [2] 配置 Bot Token\n");
+        printf("  [3] 配置 Chat ID\n");
+        printf("  [4] 配置推送间隔 (分钟)\n");
+        printf("  [5] 发送测试消息\n");
+        printf("  [6] 配置验真阈值 (N条触发)\n");
+        printf("  [0] 返回\n");
+        printf("选择: ");
+        fflush(stdout);
 
-    int choice;
-    if (scanf("%d", &choice) != 1) choice = 0;
-    while (getchar() != '\n');
+        if (!fgets(input, sizeof(input), stdin)) break;
+        int choice = atoi(input);
+        if (choice == 0) break;
 
-    char input[512];
-    switch (choice) {
-        case 1:
-            g_config.telegram_enabled = !g_config.telegram_enabled;
-            printf("Telegram 推送已%s\n", g_config.telegram_enabled ? "启用" : "禁用");
-            break;
-        case 2:
-            printf("Bot Token: ");
-            fflush(stdout);
-            if (fgets(input, sizeof(input), stdin)) {
-                input[strcspn(input, "\n")] = '\0';
-                strncpy(g_config.telegram_token, input, sizeof(g_config.telegram_token) - 1);
-                printf("已更新\n");
-            }
-            break;
-        case 3:
-            printf("Chat ID: ");
-            fflush(stdout);
-            if (fgets(input, sizeof(input), stdin)) {
-                input[strcspn(input, "\n")] = '\0';
-                strncpy(g_config.telegram_chat_id, input, sizeof(g_config.telegram_chat_id) - 1);
-                printf("已更新\n");
-            }
-            break;
-        case 4:
-            printf("推送间隔 (分钟, 0=禁用): ");
-            fflush(stdout);
-            if (fgets(input, sizeof(input), stdin)) {
-                g_config.telegram_interval = atoi(input);
-                printf("已更新为 %d 分钟\n", g_config.telegram_interval);
-            }
-            break;
-        case 5: {
-            if (!g_config.telegram_enabled) {
-                printf("请先启用 TG 推送。\n");
+        switch (choice) {
+            case 1:
+                g_config.telegram_enabled = !g_config.telegram_enabled;
+                printf("Telegram 推送已%s\n", g_config.telegram_enabled ? "启用" : "禁用");
+                config_save(&g_config, g_config.state_file);
+                break;
+            case 2:
+                printf("Bot Token: ");
+                fflush(stdout);
+                if (fgets(input, sizeof(input), stdin)) {
+                    input[strcspn(input, "\n")] = '\0';
+                    strncpy(g_config.telegram_token, input, sizeof(g_config.telegram_token) - 1);
+                    printf("已更新\n");
+                    config_save(&g_config, g_config.state_file);
+                }
+                break;
+            case 3:
+                printf("Chat ID: ");
+                fflush(stdout);
+                if (fgets(input, sizeof(input), stdin)) {
+                    input[strcspn(input, "\n")] = '\0';
+                    strncpy(g_config.telegram_chat_id, input, sizeof(g_config.telegram_chat_id) - 1);
+                    printf("已更新\n");
+                    config_save(&g_config, g_config.state_file);
+                }
+                break;
+            case 4:
+                printf("推送间隔 (分钟, 0=禁用): ");
+                fflush(stdout);
+                if (fgets(input, sizeof(input), stdin)) {
+                    g_config.telegram_interval = atoi(input);
+                    printf("已更新为 %d 分钟\n", g_config.telegram_interval);
+                    config_save(&g_config, g_config.state_file);
+                }
+                break;
+            case 5: {
+                if (!g_config.telegram_enabled) {
+                    printf("请先启用 TG 推送。\n");
+                    break;
+                }
+                printf("正在发送测试消息...\n");
+                int ret = push_telegram("<b>SAIA 通知</b>\n\nTG 推送测试成功，当前版本 " SAIA_VERSION " 运行正常。");
+                if (ret == 0) printf("消息发送请求已执行(请查看是否收到)。\n");
+                else printf("消息发送请求下发失败。\n");
                 break;
             }
-            printf("正在发送测试消息...\n");
-            int ret = push_telegram("<b>SAIA 通知</b>\n\nTG 推送测试成功，当前版本 " SAIA_VERSION " 运行正常。");
-            if (ret == 0) printf("消息发送请求已执行(请查看是否收到)。\n");
-            else printf("消息发送请求下发失败。\n");
-            break;
+            case 6:
+                printf("验真阈值 (>=1, 每达到N条验真推送一次): ");
+                fflush(stdout);
+                if (fgets(input, sizeof(input), stdin)) {
+                    int th = atoi(input);
+                    if (th < 1) th = 1;
+                    g_config.telegram_verified_threshold = th;
+                    printf("已更新为 %d 条\n", g_config.telegram_verified_threshold);
+                    config_save(&g_config, g_config.state_file);
+                }
+                break;
+            default:
+                printf("无效选项\n");
+                break;
         }
-        case 6:
-            printf("验真阈值 (>=1, 每达到N条验真推送一次): ");
-            fflush(stdout);
-            if (fgets(input, sizeof(input), stdin)) {
-                int th = atoi(input);
-                if (th < 1) th = 1;
-                g_config.telegram_verified_threshold = th;
-                printf("已更新为 %d 条\n", g_config.telegram_verified_threshold);
-            }
-            break;
-        default:
-            break;
+
+        printf("\n按Enter继续...\n");
+        fflush(stdout);
+        if (!fgets(input, sizeof(input), stdin)) break;
     }
-    config_save(&g_config, g_config.state_file);
+
     return 0;
 }
 
