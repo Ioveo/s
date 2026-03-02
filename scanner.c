@@ -74,6 +74,8 @@ void init_locks() {
 
 // ==================== 验证逻辑: SOCKS5 ====================
 
+static int socket_recv_exact(int fd, char *buf, size_t exact_size, int timeout_ms);
+
 int verify_socks5(const char *ip, uint16_t port, const char *user, const char *pass, int timeout_ms) {
     int fd = socket_create(0);
     if (fd < 0) return 0;
