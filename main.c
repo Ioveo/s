@@ -16,6 +16,21 @@ static int saia_resume_load(size_t *next_port_start, size_t *saved_port_count);
 static void saia_resume_save(size_t next_port_start, size_t port_count);
 static void saia_resume_clear(void);
 
+static void saia_write_runner_lock(pid_t pid) {
+    char path[MAX_PATH_LENGTH];
+    snprintf(path, sizeof(path), "%s/audit_runner.lock", g_config.base_dir);
+    FILE *fp = fopen(path, "w");
+    if (!fp) return;
+    fprintf(fp, "%d\n", (int)pid);
+    fclose(fp);
+}
+
+static void saia_remove_runner_lock(void) {
+    char path[MAX_PATH_LENGTH];
+    snprintf(path, sizeof(path), "%s/audit_runner.lock", g_config.base_dir);
+    if (file_exists(path)) file_remove(path);
+}
+
 // ==================== 信号处理 ====================
 
 #ifdef _WIN32
@@ -1186,6 +1201,7 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
     strcpy(g_state.status, "running");
 
     g_state.pid = get_current_pid();
+    saia_write_runner_lock(g_state.pid);
 
     g_state.total_scanned = 0;
 
@@ -1265,6 +1281,8 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
     scanner_cleanup();
 
     network_cleanup();
+
+    saia_remove_runner_lock();
 
     return 0;
 

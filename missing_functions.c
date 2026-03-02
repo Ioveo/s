@@ -30,9 +30,27 @@ static pid_t saia_read_scan_progress_pid(void) {
     return pid;
 }
 
+static pid_t saia_read_runner_lock_pid(void) {
+    char path[MAX_PATH_LENGTH];
+    snprintf(path, sizeof(path), "%s/audit_runner.lock", g_config.base_dir);
+    char *raw = file_read_all(path);
+    if (!raw) return 0;
+
+    long v = strtol(raw, NULL, 10);
+    free(raw);
+    if (v <= 0) return 0;
+    return (pid_t)v;
+}
+
+static pid_t saia_resolve_running_pid(void) {
+    pid_t pid = saia_read_scan_progress_pid();
+    if (pid > 0) return pid;
+    return saia_read_runner_lock_pid();
+}
+
 static int saia_stop_scan_session(void) {
     int issued = 0;
-    pid_t pid = saia_read_scan_progress_pid();
+    pid_t pid = saia_resolve_running_pid();
 
 #ifdef _WIN32
     if (pid > 0 && is_process_alive(pid)) {
@@ -85,13 +103,13 @@ static int saia_dash_utf8_char_width(const unsigned char *p, size_t len) {
 
 static int saia_is_scan_session_running(void) {
 #ifdef _WIN32
-    pid_t pid = saia_read_scan_progress_pid();
+    pid_t pid = saia_resolve_running_pid();
     if (pid > 0 && is_process_alive(pid)) return 1;
     return g_audit_running ? 1 : 0;
 #else
     FILE *pp = popen("screen -list 2>/dev/null", "r");
     if (!pp) {
-        pid_t pid = saia_read_scan_progress_pid();
+        pid_t pid = saia_resolve_running_pid();
         return (pid > 0 && is_process_alive(pid)) ? 1 : 0;
     }
     char line[512];
@@ -104,7 +122,7 @@ static int saia_is_scan_session_running(void) {
     }
     pclose(pp);
     if (!running) {
-        pid_t pid = saia_read_scan_progress_pid();
+        pid_t pid = saia_resolve_running_pid();
         if (pid > 0 && is_process_alive(pid)) running = 1;
     }
     return running;
@@ -956,6 +974,10 @@ int saia_interactive_mode(void) {
             /* ========== 数据操作 ========== */
             case 13: {
                 /* 更换 IP 列表 */
+                if (saia_is_scan_session_running()) {
+                    printf("\n>>> 检测到审计正在运行，请先 [2] 停止后再修改IP列表\n");
+                    break;
+                }
                 char nodes_path[MAX_PATH_LENGTH];
                 snprintf(nodes_path, sizeof(nodes_path), "%s/nodes.list", g_config.base_dir);
                 color_cyan();
@@ -976,6 +998,10 @@ int saia_interactive_mode(void) {
             }
             case 14: {
                 /* 更新 Tokens/口令 */
+                if (saia_is_scan_session_running()) {
+                    printf("\n>>> 检测到审计正在运行，请先 [2] 停止后再修改Tokens\n");
+                    break;
+                }
                 char tokens_path[MAX_PATH_LENGTH];
                 char mode_input[16];
                 char next_input[16];
