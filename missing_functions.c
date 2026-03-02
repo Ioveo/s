@@ -601,6 +601,164 @@ static int saia_get_total_memory_mb(void) {
 #endif
 }
 
+static int saia_read_text_file(const char *path, char *buf, size_t sz) {
+    if (!path || !buf || sz == 0) return -1;
+    FILE *fp = fopen(path, "r");
+    if (!fp) return -1;
+    if (!fgets(buf, (int)sz, fp)) {
+        fclose(fp);
+        return -1;
+    }
+    fclose(fp);
+    buf[strcspn(buf, "\r\n")] = '\0';
+    return 0;
+}
+
+static int saia_get_cgroup_base(char *out, size_t out_sz) {
+#ifdef _WIN32
+    (void)out;
+    (void)out_sz;
+    return -1;
+#else
+    if (!out || out_sz == 0) return -1;
+    FILE *fp = fopen("/proc/self/cgroup", "r");
+    if (!fp) return -1;
+
+    char line[1024];
+    int found = 0;
+    while (fgets(line, sizeof(line), fp)) {
+        if (strncmp(line, "0::", 3) == 0) {
+            char *p = line + 3;
+            p[strcspn(p, "\r\n")] = '\0';
+            snprintf(out, out_sz, "/sys/fs/cgroup%s", p[0] ? p : "");
+            found = 1;
+            break;
+        }
+    }
+    fclose(fp);
+    return found ? 0 : -1;
+#endif
+}
+
+static int saia_parse_u64_or_max(const char *s, uint64_t *v, int *is_max) {
+    if (!s) return -1;
+    if (strcmp(s, "max") == 0) {
+        if (is_max) *is_max = 1;
+        if (v) *v = 0;
+        return 0;
+    }
+    if (is_max) *is_max = 0;
+    if (v) *v = (uint64_t)strtoull(s, NULL, 10);
+    return 0;
+}
+
+static int saia_get_cgroup_memory_usage_mb(int *used_mb, int *limit_mb) {
+#ifdef _WIN32
+    (void)used_mb;
+    (void)limit_mb;
+    return -1;
+#else
+    char base[1024], pcur[1200], pmax[1200], cur_s[128], max_s[128];
+    if (saia_get_cgroup_base(base, sizeof(base)) != 0) return -1;
+    snprintf(pcur, sizeof(pcur), "%s/memory.current", base);
+    snprintf(pmax, sizeof(pmax), "%s/memory.max", base);
+    if (saia_read_text_file(pcur, cur_s, sizeof(cur_s)) != 0) return -1;
+    if (saia_read_text_file(pmax, max_s, sizeof(max_s)) != 0) return -1;
+
+    uint64_t cur = 0, lim = 0;
+    int lim_max = 0;
+    saia_parse_u64_or_max(cur_s, &cur, NULL);
+    saia_parse_u64_or_max(max_s, &lim, &lim_max);
+    if (lim_max || lim == 0) return -1;
+
+    if (used_mb) *used_mb = (int)(cur / (1024ULL * 1024ULL));
+    if (limit_mb) *limit_mb = (int)(lim / (1024ULL * 1024ULL));
+    return 0;
+#endif
+}
+
+static int saia_get_cgroup_pids(int *current, int *maxv) {
+#ifdef _WIN32
+    (void)current;
+    (void)maxv;
+    return -1;
+#else
+    char base[1024], pcur[1200], pmax[1200], cur_s[128], max_s[128];
+    if (saia_get_cgroup_base(base, sizeof(base)) != 0) return -1;
+    snprintf(pcur, sizeof(pcur), "%s/pids.current", base);
+    snprintf(pmax, sizeof(pmax), "%s/pids.max", base);
+    if (saia_read_text_file(pcur, cur_s, sizeof(cur_s)) != 0) return -1;
+    if (saia_read_text_file(pmax, max_s, sizeof(max_s)) != 0) return -1;
+
+    uint64_t cur = 0, lim = 0;
+    int lim_max = 0;
+    saia_parse_u64_or_max(cur_s, &cur, NULL);
+    saia_parse_u64_or_max(max_s, &lim, &lim_max);
+
+    if (current) *current = (int)cur;
+    if (maxv) *maxv = lim_max ? -1 : (int)lim;
+    return 0;
+#endif
+}
+
+static int saia_get_cgroup_cpu_pct(void) {
+#ifdef _WIN32
+    return -1;
+#else
+    static uint64_t last_usage = 0;
+    static uint64_t last_ts = 0;
+
+    char base[1024], pstat[1200], pmax[1200], line[256], max_s[128];
+    if (saia_get_cgroup_base(base, sizeof(base)) != 0) return -1;
+    snprintf(pstat, sizeof(pstat), "%s/cpu.stat", base);
+    snprintf(pmax, sizeof(pmax), "%s/cpu.max", base);
+
+    FILE *fp = fopen(pstat, "r");
+    if (!fp) return -1;
+    uint64_t usage = 0;
+    while (fgets(line, sizeof(line), fp)) {
+        if (strncmp(line, "usage_usec ", 11) == 0) {
+            usage = (uint64_t)strtoull(line + 11, NULL, 10);
+            break;
+        }
+    }
+    fclose(fp);
+    if (usage == 0) return -1;
+
+    double allowed_cpu = 1.0;
+    if (saia_read_text_file(pmax, max_s, sizeof(max_s)) == 0) {
+        char q[64] = {0}, p[64] = {0};
+        if (sscanf(max_s, "%63s %63s", q, p) == 2) {
+            if (strcmp(q, "max") != 0) {
+                uint64_t quota = (uint64_t)strtoull(q, NULL, 10);
+                uint64_t period = (uint64_t)strtoull(p, NULL, 10);
+                if (quota > 0 && period > 0) allowed_cpu = (double)quota / (double)period;
+            }
+        }
+    }
+    if (allowed_cpu <= 0.0) allowed_cpu = 1.0;
+
+    uint64_t now = get_current_time_ms();
+    if (last_ts == 0 || now <= last_ts || usage < last_usage) {
+        last_ts = now;
+        last_usage = usage;
+        return 0;
+    }
+
+    uint64_t dt_ms = now - last_ts;
+    uint64_t du_us = usage - last_usage;
+    last_ts = now;
+    last_usage = usage;
+    if (dt_ms == 0) return 0;
+
+    double used_cpu = (double)du_us / ((double)dt_ms * 1000.0);
+    int pct = (int)((used_cpu / allowed_cpu) * 100.0);
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    return pct;
+#endif
+}
+
 static int saia_get_disk_usage_percent(double *used_gb, double *total_gb) {
 #ifdef _WIN32
     ULARGE_INTEGER free_bytes, total_bytes;
@@ -660,10 +818,26 @@ static int saia_count_process_saia(void) {
 
 static void saia_vps_realtime_panel(void) {
     while (g_running) {
-        int cpu = get_cpu_usage();
+        int cpu = saia_get_cgroup_cpu_pct();
+        if (cpu < 0) cpu = get_cpu_usage();
+
         int avail_mb = get_available_memory_mb();
         int total_mb = saia_get_total_memory_mb();
+        int cg_used_mb = -1, cg_limit_mb = -1;
+        if (saia_get_cgroup_memory_usage_mb(&cg_used_mb, &cg_limit_mb) == 0) {
+            total_mb = cg_limit_mb;
+            avail_mb = cg_limit_mb - cg_used_mb;
+            if (avail_mb < 0) avail_mb = 0;
+        }
+
         int proc_total = saia_count_process_total();
+        int proc_limit = -1;
+        int cg_pids_cur = -1, cg_pids_max = -1;
+        if (saia_get_cgroup_pids(&cg_pids_cur, &cg_pids_max) == 0) {
+            proc_total = cg_pids_cur;
+            proc_limit = cg_pids_max;
+        }
+
         int proc_saia = saia_count_process_saia();
         double used_gb = 0.0, total_gb = 0.0;
         int disk_pct = saia_get_disk_usage_percent(&used_gb, &total_gb);
@@ -688,7 +862,11 @@ static void saia_vps_realtime_panel(void) {
         } else {
             printf("  磁盘占用: N/A\n");
         }
-        printf("  进程总数: %d\n", proc_total >= 0 ? proc_total : 0);
+        if (proc_limit > 0) {
+            printf("  进程总数: %d/%d\n", proc_total >= 0 ? proc_total : 0, proc_limit);
+        } else {
+            printf("  进程总数: %d\n", proc_total >= 0 ? proc_total : 0);
+        }
         printf("  SAIA相关进程: %d\n", proc_saia >= 0 ? proc_saia : 0);
         printf("\n按 Enter / q / 0 返回 (每2秒自动刷新)\n");
         fflush(stdout);
