@@ -5,6 +5,7 @@ static volatile int verify_running_threads = 0;
 static volatile int feeding_in_progress = 0;
 static volatile int pending_verify_tasks = 0;
 static char progress_token[512] = "-";
+static long long g_completion_report_start_offset = 0;
 
 typedef struct verify_task_s {
     char ip[64];
@@ -862,25 +863,35 @@ static void send_completion_verified_report(void) {
     } else {
         snprintf(path, sizeof(path), "%s/audit_report.log", g_config.base_dir);
     }
-    char **lines = NULL;
-    size_t lc = 0;
-    if (file_read_lines(path, &lines, &lc) != 0 || !lines || lc == 0) {
+    long long start_off = g_completion_report_start_offset;
+    if (start_off < 0) start_off = 0;
+
+    FILE *fp = fopen(path, "rb");
+    if (!fp) {
         char msg[768];
         snprintf(msg, sizeof(msg), "验真完成 | 模式:%s | 条数:0\n暂无验真数据", mode_report_label(g_state.mode));
         append_server_marker(msg, sizeof(msg));
         send_telegram_message(g_config.telegram_token, g_config.telegram_chat_id, msg);
-        if (lines) {
-            for (size_t i = 0; i < lc; i++) free(lines[i]);
-            free(lines);
-        }
         return;
     }
 
     uint64_t verified = 0;
-    for (size_t i = 0; i < lc; i++) {
-        const char *s = lines[i] ? lines[i] : "";
-        if (strstr(s, "[XUI_VERIFIED]") || strstr(s, "[S5_VERIFIED]")) verified++;
+    if (start_off > 0) {
+        if (fseek(fp, 0, SEEK_END) == 0) {
+            long end_pos = ftell(fp);
+            if (end_pos > 0 && (long long)end_pos > start_off) {
+                (void)fseek(fp, (long)start_off, SEEK_SET);
+            } else {
+                (void)fseek(fp, 0, SEEK_END);
+            }
+        }
     }
+
+    char line[4096];
+    while (fgets(line, sizeof(line), fp)) {
+        if (strstr(line, "[XUI_VERIFIED]") || strstr(line, "[S5_VERIFIED]")) verified++;
+    }
+    fclose(fp);
 
     char summary[512];
     snprintf(summary, sizeof(summary),
@@ -888,22 +899,44 @@ static void send_completion_verified_report(void) {
              mode_report_label(g_state.mode),
              (unsigned long long)verified);
 
+    if (verified == 0) {
+        char none_msg[512];
+        snprintf(none_msg, sizeof(none_msg), "%s\n暂无验真数据", summary);
+        append_server_marker(none_msg, sizeof(none_msg));
+        send_telegram_message(g_config.telegram_token, g_config.telegram_chat_id, none_msg);
+        return;
+    }
+
+    fp = fopen(path, "rb");
+    if (!fp) return;
+
+    if (start_off > 0) {
+        if (fseek(fp, 0, SEEK_END) == 0) {
+            long end_pos = ftell(fp);
+            if (end_pos > 0 && (long long)end_pos > start_off) {
+                (void)fseek(fp, (long)start_off, SEEK_SET);
+            } else {
+                fclose(fp);
+                return;
+            }
+        }
+    } else {
+        (void)fseek(fp, 0, SEEK_SET);
+    }
+
     char chunk[3600];
     snprintf(chunk, sizeof(chunk), "%s", summary);
-    int sent_any = 0;
 
-    for (size_t i = 0; i < lc; i++) {
-        const char *s = lines[i] ? lines[i] : "";
-        if (!(strstr(s, "[XUI_VERIFIED]") || strstr(s, "[S5_VERIFIED]"))) continue;
+    while (fgets(line, sizeof(line), fp)) {
+        if (!(strstr(line, "[XUI_VERIFIED]") || strstr(line, "[S5_VERIFIED]"))) continue;
 
         char one[256];
-        format_verified_from_report_line(s, one, sizeof(one));
+        format_verified_from_report_line(line, one, sizeof(one));
 
         size_t need = strlen(chunk) + strlen(one) + 1;
         if (need >= sizeof(chunk) - 64) {
             append_server_marker(chunk, sizeof(chunk));
             send_telegram_message(g_config.telegram_token, g_config.telegram_chat_id, chunk);
-            sent_any = 1;
             snprintf(chunk, sizeof(chunk), "%s", one);
             continue;
         }
@@ -913,22 +946,12 @@ static void send_completion_verified_report(void) {
         }
         strncat(chunk, one, sizeof(chunk) - strlen(chunk) - 1);
     }
+    fclose(fp);
 
-    if (verified > 0 && strlen(chunk) > 0) {
+    if (strlen(chunk) > 0) {
         append_server_marker(chunk, sizeof(chunk));
         send_telegram_message(g_config.telegram_token, g_config.telegram_chat_id, chunk);
-        sent_any = 1;
     }
-
-    if (!sent_any && verified == 0) {
-        char none_msg[512];
-        snprintf(none_msg, sizeof(none_msg), "%s\n暂无验真数据", summary);
-        append_server_marker(none_msg, sizeof(none_msg));
-        send_telegram_message(g_config.telegram_token, g_config.telegram_chat_id, none_msg);
-    }
-
-    for (size_t i = 0; i < lc; i++) free(lines[i]);
-    free(lines);
 }
 
 static void format_compact_verified_line(const char *ip, uint16_t port,
@@ -1976,6 +1999,18 @@ void scanner_start_streaming(const char *targets_file,
     feeding_in_progress = 0;
     snprintf(progress_token, sizeof(progress_token), "-");
     MUTEX_UNLOCK(lock_stats);
+
+    g_completion_report_start_offset = 0;
+    {
+        const char *report_path = g_config.report_file[0] ? g_config.report_file : NULL;
+        if (!report_path || !*report_path) {
+            static char fallback_report[MAX_PATH_LENGTH];
+            snprintf(fallback_report, sizeof(fallback_report), "%s/audit_report.log", g_config.base_dir);
+            report_path = fallback_report;
+        }
+        long long sz = file_size_bytes(report_path);
+        if (sz > 0) g_completion_report_start_offset = sz;
+    }
 
     /* 快速估算总目标数 — 文件流式读取，不整体加载到内存 */
     size_t est_total = scanner_estimate_targets_from_file(targets_file);
