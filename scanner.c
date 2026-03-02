@@ -954,6 +954,10 @@ static void send_completion_verified_report(void) {
     }
 }
 
+void scanner_send_completion_report(void) {
+    send_completion_verified_report();
+}
+
 static void format_compact_verified_line(const char *ip, uint16_t port,
                                          const char *user, const char *pass,
                                          const char *asn_in,
@@ -2176,10 +2180,6 @@ void scanner_start_streaming(const char *targets_file,
         final_status = "completed_skipped";
     }
     write_scan_progress(&feed_ctx, final_status);
-
-    if (strcmp(final_status, "completed") == 0 || strcmp(final_status, "completed_skipped") == 0) {
-        send_completion_verified_report();
-    }
 
     if (feed_ctx.skipped_resume > 0 || feed_ctx.skipped_history > 0) {
         printf("跳过统计 -> resume:%d history:%d\n", feed_ctx.skipped_resume, feed_ctx.skipped_history);

@@ -1246,6 +1246,7 @@ int saia_run_audit_internal(int auto_mode, int auto_scan_mode, int auto_threads,
 
     if (g_running && !g_reload) {
         strcpy(g_state.status, "completed");
+        scanner_send_completion_report();
         if (g_config.resume_enabled) {
             saia_resume_clear();
         }

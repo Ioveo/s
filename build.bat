@@ -50,7 +50,7 @@ echo.
 set FLAGS=-std=c11 -Wall -O2 -D_GNU_SOURCE
 
 %COMPILER% %FLAGS% ^
-    main.c config.c file_ops.c network.c ^
+    main.c missing_functions.c config.c file_ops.c network.c http.c ^
     scanner.c json_parser.c utils.c ^
     color.c string_ops.c backpressure.c ^
     -o saia.exe %LINK_OPTS%
@@ -82,7 +82,7 @@ echo.
 set FLAGS=/O2 /D_CRT_SECURE_NO_WARNINGS
 
 cl %FLAGS% ^
-    main.c config.c file_ops.c network.c ^
+    main.c missing_functions.c config.c file_ops.c network.c http.c ^
     scanner.c json_parser.c utils.c ^
     color.c string_ops.c backpressure.c ^
     /Fe:saia.exe %LINK_OPTS%

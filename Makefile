@@ -16,6 +16,7 @@ endif
 
 # 源文件
 SRCS = main.c \
+       missing_functions.c \
        config.c \
        file_ops.c \
        network.c \

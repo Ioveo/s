@@ -88,7 +88,7 @@ echo [编译] 正在编译 SAIA...
 echo.
 
 cl /O2 /D_CRT_SECURE_NO_WARNINGS ^
-   main.c config.c file_ops.c network.c scanner.c ^
+   main.c missing_functions.c config.c file_ops.c network.c http.c scanner.c ^
    json_parser.c utils.c color.c string_ops.c backpressure.c ^
    /Fe:saia.exe
 
