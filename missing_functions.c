@@ -342,6 +342,71 @@ static void saia_dash_load_progress(dash_progress_t *p) {
     free(raw);
 }
 
+static void saia_format_verified_compact(const char *line, char *out, size_t out_sz) {
+    if (!out || out_sz == 0) return;
+    out[0] = '\0';
+    if (!line) {
+        snprintf(out, out_sz, "-");
+        return;
+    }
+
+    char ip_port[64] = "-";
+    char user[128] = "-";
+    char pass[128] = "-";
+    char asn[32] = "-";
+
+    const char *p = line;
+    while (*p) {
+        unsigned a, b, c, d, port;
+        if (sscanf(p, "%u.%u.%u.%u:%u", &a, &b, &c, &d, &port) == 5) {
+            if (a <= 255 && b <= 255 && c <= 255 && d <= 255 && port <= 65535) {
+                snprintf(ip_port, sizeof(ip_port), "%u.%u.%u.%u:%u", a, b, c, d, port);
+                break;
+            }
+        }
+        p++;
+    }
+
+    const char *u = strstr(line, "账号:");
+    if (u) {
+        u += 5;
+        size_t i = 0;
+        while (u[i] && u[i] != '|' && !isspace((unsigned char)u[i]) && i + 1 < sizeof(user)) {
+            user[i] = u[i];
+            i++;
+        }
+        user[i] = '\0';
+        if (i == 0) snprintf(user, sizeof(user), "-");
+    }
+
+    const char *pw = strstr(line, "密码:");
+    if (pw) {
+        pw += 5;
+        size_t i = 0;
+        while (pw[i] && pw[i] != '|' && !isspace((unsigned char)pw[i]) && i + 1 < sizeof(pass)) {
+            pass[i] = pw[i];
+            i++;
+        }
+        pass[i] = '\0';
+        if (i == 0) snprintf(pass, sizeof(pass), "-");
+    }
+
+    const char *ap = strstr(line, "AS");
+    if (ap) {
+        size_t i = 0;
+        asn[i++] = 'A';
+        asn[i++] = 'S';
+        ap += 2;
+        while (*ap && isdigit((unsigned char)*ap) && i + 1 < sizeof(asn)) {
+            asn[i++] = *ap++;
+        }
+        asn[i] = '\0';
+        if (i <= 2) snprintf(asn, sizeof(asn), "-");
+    }
+
+    snprintf(out, out_sz, "%s:%s:%s # %s", ip_port, user, pass, asn);
+}
+
 #ifdef _WIN32
 static unsigned __stdcall saia_audit_thread_entry(void *arg) {
 #else
@@ -695,7 +760,9 @@ int saia_interactive_mode(void) {
                     printf("\n[验真]\n");
                     for (size_t i = 0; i < lc; i++) {
                         if (lines[i] && strstr(lines[i], "[XUI_VERIFIED]")) {
-                            printf("  %s\n", lines[i]);
+                            char compact[256];
+                            saia_format_verified_compact(lines[i], compact, sizeof(compact));
+                            printf("  %s\n", compact);
                             verified++;
                         }
                     }
@@ -734,7 +801,9 @@ int saia_interactive_mode(void) {
                     printf("\n[验真]\n");
                     for (size_t i = 0; i < lc; i++) {
                         if (lines[i] && strstr(lines[i], "[S5_VERIFIED]")) {
-                            printf("  %s\n", lines[i]);
+                            char compact[256];
+                            saia_format_verified_compact(lines[i], compact, sizeof(compact));
+                            printf("  %s\n", compact);
                             verified++;
                         }
                     }
@@ -1038,6 +1107,7 @@ int saia_telegram_menu(void) {
         printf("  Bot Token: %s***\n", g_config.telegram_token);
         printf("  Chat ID:   %s\n", g_config.telegram_chat_id);
         printf("  推送间隔:  %d 分钟\n", g_config.telegram_interval);
+        printf("  验真阈值:  %d 条\n", g_config.telegram_verified_threshold);
     }
 
     printf("\n  [1] 启用/禁用\n");
@@ -1045,6 +1115,7 @@ int saia_telegram_menu(void) {
     printf("  [3] 配置 Chat ID\n");
     printf("  [4] 配置推送间隔 (分钟)\n");
     printf("  [5] 发送测试消息\n");
+    printf("  [6] 配置验真阈值 (N条触发)\n");
     printf("  [0] 返回\n");
     printf("选择: ");
     fflush(stdout);
@@ -1096,9 +1167,20 @@ int saia_telegram_menu(void) {
             else printf("消息发送请求下发失败。\n");
             break;
         }
+        case 6:
+            printf("验真阈值 (>=1, 每达到N条验真推送一次): ");
+            fflush(stdout);
+            if (fgets(input, sizeof(input), stdin)) {
+                int th = atoi(input);
+                if (th < 1) th = 1;
+                g_config.telegram_verified_threshold = th;
+                printf("已更新为 %d 条\n", g_config.telegram_verified_threshold);
+            }
+            break;
         default:
             break;
     }
+    config_save(&g_config, g_config.state_file);
     return 0;
 }
 

@@ -583,6 +583,71 @@ static void saia_menu_count_report(uint64_t *xui_found, uint64_t *xui_verified,
     free(lines);
 }
 
+static void saia_format_verified_compact(const char *line, char *out, size_t out_sz) {
+    if (!out || out_sz == 0) return;
+    out[0] = '\0';
+    if (!line) {
+        snprintf(out, out_sz, "-");
+        return;
+    }
+
+    char ip_port[64] = "-";
+    char user[128] = "-";
+    char pass[128] = "-";
+    char asn[32] = "-";
+
+    const char *p = line;
+    while (*p) {
+        unsigned a, b, c, d, port;
+        if (sscanf(p, "%u.%u.%u.%u:%u", &a, &b, &c, &d, &port) == 5) {
+            if (a <= 255 && b <= 255 && c <= 255 && d <= 255 && port <= 65535) {
+                snprintf(ip_port, sizeof(ip_port), "%u.%u.%u.%u:%u", a, b, c, d, port);
+                break;
+            }
+        }
+        p++;
+    }
+
+    const char *u = strstr(line, "账号:");
+    if (u) {
+        u += 5;
+        size_t i = 0;
+        while (u[i] && u[i] != '|' && !isspace((unsigned char)u[i]) && i + 1 < sizeof(user)) {
+            user[i] = u[i];
+            i++;
+        }
+        user[i] = '\0';
+        if (i == 0) snprintf(user, sizeof(user), "-");
+    }
+
+    const char *pw = strstr(line, "密码:");
+    if (pw) {
+        pw += 5;
+        size_t i = 0;
+        while (pw[i] && pw[i] != '|' && !isspace((unsigned char)pw[i]) && i + 1 < sizeof(pass)) {
+            pass[i] = pw[i];
+            i++;
+        }
+        pass[i] = '\0';
+        if (i == 0) snprintf(pass, sizeof(pass), "-");
+    }
+
+    const char *ap = strstr(line, "AS");
+    if (ap) {
+        size_t i = 0;
+        asn[i++] = 'A';
+        asn[i++] = 'S';
+        ap += 2;
+        while (*ap && isdigit((unsigned char)*ap) && i + 1 < sizeof(asn)) {
+            asn[i++] = *ap++;
+        }
+        asn[i] = '\0';
+        if (i <= 2) snprintf(asn, sizeof(asn), "-");
+    }
+
+    snprintf(out, out_sz, "%s:%s:%s # %s", ip_port, user, pass, asn);
+}
+
 int saia_print_menu(void) {
     const char *bdr = C_BLUE;
     int term_cols = saia_terminal_columns();
@@ -1753,7 +1818,9 @@ int saia_nodes_menu(void) {
                 for (size_t i = 0; i < lc; i++) {
                     if (!lines[i]) continue;
                     if (strstr(lines[i], "[XUI_VERIFIED]")) {
-                        printf("  %s\n", lines[i]);
+                        char compact[256];
+                        saia_format_verified_compact(lines[i], compact, sizeof(compact));
+                        printf("  %s\n", compact);
                         verified++;
                     }
                 }
@@ -1799,7 +1866,9 @@ int saia_nodes_menu(void) {
                 for (size_t i = 0; i < lc; i++) {
                     if (!lines[i]) continue;
                     if (strstr(lines[i], "[S5_VERIFIED]")) {
-                        printf("  %s\n", lines[i]);
+                        char compact[256];
+                        saia_format_verified_compact(lines[i], compact, sizeof(compact));
+                        printf("  %s\n", compact);
                         verified++;
                     }
                 }
