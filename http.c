@@ -172,7 +172,12 @@ static http_response_t* http_socket_request(const char *method, const char *url,
     }
     
     char *req_str = string_buffer_to_string(req);
-    socket_send_all(fd, req_str, strlen(req_str), timeout_ms);
+    if (socket_send_all(fd, req_str, strlen(req_str), timeout_ms) < 0) {
+        free(req_str);
+        string_buffer_free(req);
+        socket_close(fd);
+        return NULL;
+    }
     free(req_str);
     string_buffer_free(req);
     

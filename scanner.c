@@ -181,12 +181,20 @@ int verify_socks5(const char *ip, uint16_t port, const char *user, const char *p
         return 0;
     }
 
-    char http_resp[1024];
-    int n = socket_recv_until(fd, http_resp, sizeof(http_resp) - 1, NULL, timeout_ms);
+    char http_resp[2048];
+    int total = 0;
+    while (total < (int)sizeof(http_resp) - 1) {
+        int n = socket_recv_until(fd, http_resp + total,
+                                  (sizeof(http_resp) - 1) - (size_t)total,
+                                  NULL, timeout_ms);
+        if (n <= 0) break;
+        total += n;
+        if (strstr(http_resp, "\r\n\r\n")) break;
+    }
     socket_close(fd);
 
-    if (n > 0) {
-        http_resp[n] = '\0';
+    if (total > 0) {
+        http_resp[total] = '\0';
         // 只要收到任何合法 HTTP 响应就认为代理真实有效
         if (strstr(http_resp, "HTTP/1.1") || strstr(http_resp, "HTTP/1.0") ||
             strstr(http_resp, "cloudflare") || strstr(http_resp, "Cloudflare") ||
