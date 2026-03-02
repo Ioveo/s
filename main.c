@@ -646,9 +646,9 @@ static void saia_format_verified_compact(const char *line, char *out, size_t out
     }
 
     if (strchr(user, ':') && strchr(pass, ':') && strcmp(user, pass) == 0) {
-        snprintf(out, out_sz, "%s:%s # %s", ip_port, user, asn);
+        snprintf(out, out_sz, "%s:%s %s", ip_port, user, asn);
     } else {
-        snprintf(out, out_sz, "%s:%s:%s # %s", ip_port, user, pass, asn);
+        snprintf(out, out_sz, "%s:%s:%s %s", ip_port, user, pass, asn);
     }
 }
 
