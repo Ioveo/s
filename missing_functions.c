@@ -404,7 +404,11 @@ static void saia_format_verified_compact(const char *line, char *out, size_t out
         if (i <= 2) snprintf(asn, sizeof(asn), "-");
     }
 
-    snprintf(out, out_sz, "%s:%s:%s # %s", ip_port, user, pass, asn);
+    if (strchr(user, ':') && strchr(pass, ':') && strcmp(user, pass) == 0) {
+        snprintf(out, out_sz, "%s:%s # %s", ip_port, user, asn);
+    } else {
+        snprintf(out, out_sz, "%s:%s:%s # %s", ip_port, user, pass, asn);
+    }
 }
 
 #ifdef _WIN32
