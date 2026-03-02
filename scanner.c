@@ -1423,6 +1423,7 @@ static void write_scan_progress(feed_context_t *ctx, const char *status) {
 
     snprintf(payload, sizeof(payload),
              "status=%s\n"
+             "pid=%d\n"
              "est_total=%zu\n"
              "fed=%zu\n"
              "scanned=%llu\n"
@@ -1438,8 +1439,9 @@ static void write_scan_progress(feed_context_t *ctx, const char *status) {
              "current_token=%s\n"
              "current_ip=%s\n"
              "current_port=%u\n"
-             "updated=%llu\n",
-             status ? status : "running",
+              "updated=%llu\n",
+              status ? status : "running",
+             (int)g_state.pid,
              ctx->est_total,
              ctx->fed_count,
              (unsigned long long)scanned,
